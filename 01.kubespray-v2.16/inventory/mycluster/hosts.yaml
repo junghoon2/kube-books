@@ -7,17 +7,17 @@ all:
     ubun20-3:
       ansible_host: ubun20-3
   children:
-    kube-master:
+    kube-master:  # 1)
       hosts:
         ubun20-1:
         ubun20-2:
         ubun20-3:
-    kube-node:
+    kube-node:  # 2) 
       hosts:
         ubun20-1:
         ubun20-2:
         ubun20-3:
-    etcd:
+    etcd:  # 3) 
       hosts:
         ubun20-1:
         ubun20-2:
@@ -26,5 +26,5 @@ all:
       children:
         kube-master:
         kube-node:
-    calico-rr:
+    calico-rr:  # 4) 
       hosts: {}
