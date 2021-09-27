@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-svc
+spec:
+  selector:  
+    app: nginx  # 파드 Label과 동일
+  type: ClusterIP
+  ports:
+  - name: tcp
+    port: 80  # 서비스로 연결하는 포트
+    targetPort: 80  # 타깃파드의 포트
