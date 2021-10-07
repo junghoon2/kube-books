@@ -97,7 +97,7 @@ extraEnvVarsSecret: ""
 
 ## @param replicaCount Number of NGINX replicas to deploy
 ##
-replicaCount: 1
+replicaCount: 2
 ## @param podLabels Additional labels for NGINX pods
 ## ref: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
 ##
@@ -195,8 +195,8 @@ containerPorts:
 resources:
   ## Example:
   limits:
-     cpu: 100m
-     memory: 128Mi
+     cpu: 1000m
+     memory: 512Mi
   # limits: {}
   ## Examples:
   requests:
