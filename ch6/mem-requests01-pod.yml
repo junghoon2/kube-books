@@ -12,4 +12,6 @@ spec:
       limits:
         memory: "6Gi"
     command: ["stress"]
-    args: ["--vm", "1", "--vm-bytes", "6500M", "--vm-hang", "1"]
+    args: ["--vm", "1", "--vm-bytes", "1000M", "--vm-hang", "1"]
+  nodeSelector:
+    kubernetes.io/hostname: ubun20-4
