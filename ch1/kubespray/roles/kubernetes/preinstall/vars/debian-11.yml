@@ -1,0 +1,9 @@
+---
+required_pkgs:
+  - python3-apt
+  - gnupg
+  - apt-transport-https
+  - software-properties-common
+  - conntrack
+  - iptables
+  - apparmor
