@@ -14,4 +14,4 @@ spec:
     command: ["stress"]
     args: ["--vm", "1", "--vm-bytes", "5500M", "--vm-hang", "1"]
   nodeSelector:
-    kubernetes.io/hostname: ubun20-4   
+    kubernetes.io/hostname: ubun20-4
