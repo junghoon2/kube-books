@@ -9,4 +9,4 @@ spec:
     command:
     - "/bin/sh"
     - "-c"
-    - "while true; do date >> /data/pod-out.txt; cd /data; sync; sync; sleep 30; done"
+    - "while true; do date >> /home/pod-out.txt; cd /home; sync; sync; sleep 30; done"
