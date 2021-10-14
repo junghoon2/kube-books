@@ -1,0 +1,38 @@
+{
+  "extends": [
+    "@commitlint/config-conventional"
+  ],
+  "rules": {
+    "type-enum": [
+      2,
+      "always",
+      [
+        "bot",
+        "build",
+        "ceph",
+        "cephfs-mirror",
+        "ci",
+        "core",
+        "csi",
+        "docs",
+        "helm",
+        "mds",
+        "mgr",
+        "mon",
+        "osd",
+        "pool",
+        "rbd-mirror",
+        "rgw",
+        "test"
+      ]
+    ],
+    "body-leading-blank": [
+      2,
+      "always"
+    ],
+    "footer-leading-blank": [
+      2,
+      "always"
+    ]
+  }
+}
