@@ -27,7 +27,7 @@ configInline:
    - name: default
      protocol: layer2
      addresses:
-     - 172.17.29.65 - 172.17.29.69
+     - 172.17.29.20 - 172.17.29.29
 
 
 rbac:
