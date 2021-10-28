@@ -22,7 +22,7 @@ expose:
     auto:
       # The common name used to generate the certificate, it's necessary
       # when the type isn't "ingress"
-      commonName: ""
+      commonName: "harbor.myweb.io"
     secret:
       # The name of secret which contains keys named:
       # "tls.crt" - the certificate
@@ -118,6 +118,7 @@ expose:
 #
 # If Harbor is deployed behind the proxy, set it as the URL of proxy
 externalURL: https://harbor.myweb.io
+# externalURL: https://core.harbor.domain
 
 # The internal TLS used for harbor components secure communicating. In order to enable https
 # in each components tls cert files need to provided in advance.
@@ -202,19 +203,19 @@ persistence:
       # Specify the "storageClass" used to provision the volume. Or the default
       # StorageClass will be used(the default).
       # Set it to "-" to disable dynamic provisioning
-      storageClass: "rook-ceph-block"
+      storageClass: ""
       subPath: ""
       accessMode: ReadWriteOnce
       size: 5Gi
     chartmuseum:
       existingClaim: ""
-      storageClass: "rook-ceph-block"
+      storageClass: ""
       subPath: ""
       accessMode: ReadWriteOnce
       size: 5Gi
     jobservice:
       existingClaim: ""
-      storageClass: "rook-ceph-block"
+      storageClass: ""
       subPath: ""
       accessMode: ReadWriteOnce
       size: 1Gi
@@ -222,7 +223,7 @@ persistence:
     # be ignored
     database:
       existingClaim: ""
-      storageClass: "rook-ceph-block"
+      storageClass: ""
       subPath: ""
       accessMode: ReadWriteOnce
       size: 1Gi
@@ -230,13 +231,13 @@ persistence:
     # be ignored
     redis:
       existingClaim: ""
-      storageClass: "rook-ceph-block"
+      storageClass: ""
       subPath: ""
       accessMode: ReadWriteOnce
       size: 1Gi
     trivy:
       existingClaim: ""
-      storageClass: "rook-ceph-block"
+      storageClass: ""
       subPath: ""
       accessMode: ReadWriteOnce
       size: 5Gi
@@ -342,7 +343,7 @@ updateStrategy:
 logLevel: info
 
 # The initial password of Harbor admin. Change it from portal after launching Harbor
-harborAdminPassword: "Qwer!234"
+harborAdminPassword: "Harbor12345"
 
 # The name of the secret which contains key named "ca.crt". Setting this enables the
 # download link on portal to download the certificate of CA when the certificate isn't
