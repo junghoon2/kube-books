@@ -17,7 +17,7 @@ spec:
       containers:
       - name: busybox
         # image: busybox
-        image: harbor.myweb.io/erp/busybox
+        image: harbor.myweb.io/erp/busybox:0.1
         command:
         - "/bin/sh"
         - "-c"
