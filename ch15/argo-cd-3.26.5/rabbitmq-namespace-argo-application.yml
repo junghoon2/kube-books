@@ -12,6 +12,4 @@ spec:
     repoURL: https://gitlab.spk.io/spk/mytest.git
     path: 06.rabbitmq/rabbitmq-8-24.2
     targetRevision: HEAD
-  syncPolicy:
-    syncOptions:
-    - CreateNamespace=true 
+

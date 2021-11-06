@@ -11,12 +11,12 @@ spec:
     server: https://kubernetes.default.svc
   project: default
   source:
-    repoURL: https://gitlab.spk.io/jerry/test-stg.git
+    repoURL: https://gitlab.myweb.io/jerry/test-stg.git
     path: 06.rabbitmq/rabbitmq-8-24.2
     targetRevision: HEAD
     helm:
       valueFiles:
       - my-values.yaml
   syncPolicy:
-    automated:
-      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true 
