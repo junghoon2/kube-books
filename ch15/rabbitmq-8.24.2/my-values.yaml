@@ -716,7 +716,8 @@ persistence:
 service:
   ## @param service.type Kubernetes Service type
   ##
-  type: ClusterIP
+  # type: ClusterIP    # 아르고시디 변경 전
+  type: LoadBalancer   # 아르고시디 변경 후 
 
   ## @param service.portEnabled Amqp port. Cannot be disabled when `auth.tls.enabled` is `false`. Listener can be disabled with `listeners.tcp = none`.
   portEnabled: true
