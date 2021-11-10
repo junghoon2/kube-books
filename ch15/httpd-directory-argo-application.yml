@@ -1,22 +1,23 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: rabbitmq-helm
-  namespace: argocd
+  name: httpd
+  namespace: argocd  
   finalizers:
   - resources-finalizer.argocd.argoproj.io
 spec:
   destination:
-    namespace: rabbitmq
+    namespace: httpd
     server: https://kubernetes.default.svc
   project: default
   source:
     repoURL: https://gitlab.myweb.io/jerry/test-stg.git
-    path: 06.rabbitmq/rabbitmq-8-24.2
+    path: 03.httpd
     targetRevision: HEAD
-    helm:
-      valueFiles:
-      - my-values.yaml
+    directory:
+      recurse: true
   syncPolicy:
     syncOptions:
-    - CreateNamespace=true 
+    - CreateNamespace=true
+    automated:
+      prune: true
