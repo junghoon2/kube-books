@@ -318,7 +318,7 @@ alertmanager:
     loadBalancerSourceRanges: []
     ## Service type
     ##
-    type: ClusterIP
+    type: NodePort
 
   ## Configuration for creating a separate Service for each statefulset Alertmanager replica
   ##
@@ -983,7 +983,7 @@ kubeControllerManager:
     ## Enable scraping kube-controller-manager over https.
     ## Requires proper certs (not self-signed) and delegated authentication/authorization checks
     ##
-    https: false
+    https: true
 
     # Skip TLS certificate validation when scraping
     insecureSkipVerify: null
@@ -1110,7 +1110,7 @@ kubeDns:
 ## Component scraping etcd
 ##
 kubeEtcd:
-  enabled: true
+  enabled: false
 
   ## If your etcd is not deployed as a pod, specify IPs it can be found on
   ##
@@ -1266,7 +1266,7 @@ kubeProxy:
     ## Enable scraping kube-proxy over https.
     ## Requires proper certs (not self-signed) and delegated authentication/authorization checks
     ##
-    https: false
+    https: true
 
     ## MetricRelabelConfigs to apply to samples after scraping, but before ingestion.
     ## ref: https://github.com/prometheus-operator/prometheus-operator/blob/master/Documentation/api.md#relabelconfig
@@ -1799,7 +1799,7 @@ prometheus:
     loadBalancerSourceRanges: []
     ## Service type
     ##
-    type: ClusterIP
+    type: NodePort
 
     sessionAffinity: ""
 
@@ -2235,7 +2235,7 @@ prometheus:
 
     ## How long to retain metrics
     ##
-    retention: 10d
+    retention: 5d
 
     ## Maximum size of metrics
     ##
@@ -2335,17 +2335,17 @@ prometheus:
     ## Prometheus StorageSpec for persistent data
     ## ref: https://github.com/prometheus-operator/prometheus-operator/blob/master/Documentation/user-guides/storage.md
     ##
-    storageSpec: {}
+    storageSpec: 
     ## Using PersistentVolumeClaim
     ##
-    #  volumeClaimTemplate:
-    #    spec:
-    #      storageClassName: gluster
-    #      accessModes: ["ReadWriteOnce"]
-    #      resources:
-    #        requests:
-    #          storage: 50Gi
-    #    selector: {}
+     volumeClaimTemplate:
+       spec:
+         storageClassName: openebs-hostpath
+         accessModes: ["ReadWriteOnce"]
+         resources:
+           requests:
+             storage: 15Gi
+      #  selector: {}
 
     ## Using tmpfs volume
     ##
