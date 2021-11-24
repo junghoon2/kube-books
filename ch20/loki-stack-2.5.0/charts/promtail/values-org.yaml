@@ -185,7 +185,7 @@ config:
     sync_period: 10s
 
 serviceMonitor:
-  enabled: true
+  enabled: false
   interval: ""
   additionalLabels: {}
   annotations: {}
