@@ -5,7 +5,7 @@ metadata:
   namespace: default
 spec:
   accessModes:
-  - ReadWriteOncePod   
+  - ReadWriteOnce   
   resources:
     requests:
       storage: 1Gi
