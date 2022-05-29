@@ -52,6 +52,10 @@
         "enabled": {
           "type": "boolean"
         },
+        "logLevel": {
+          "type": "string",
+          "enum": [ "all", "debug", "info", "warn", "error", "none" ]
+        },
         "image": {
           "type": "object",
           "properties": {
@@ -103,6 +107,9 @@
             "type": "object"
           }
         },
+        "priorityClassName": {
+          "type":"string"
+        },
         "affinity": {
           "type": "object"
         },
@@ -127,7 +134,14 @@
       "description": "Secrets used for pulling images",
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [ "name" ],
+        "additionalProperties": false
       }
     },
     "nameOverride": {
@@ -172,11 +186,14 @@
       "properties": {
         "scrapeAnnotations": { "type": "boolean" },
         "metricsPort": { "type": "integer" },
+        "serviceAccount": { "type": "string" },
+        "namespace": { "type": "string" },
         "podMonitor": {
           "description": "Prometheus Operator PodMonitors",
           "type": "object",
           "properties": {
             "enabled": { "type": "boolean" },
+            "additionalMonitors": { "type": "object" },
             "jobLabel": { "type": "string" },
             "interval": {
               "anyOf": [
@@ -203,6 +220,7 @@
           "type": "object",
           "properties": {
             "enabled": { "type": "boolean" },
+            "additionalMonitors": { "type": "object" },
             "staleConfig": { "$ref": "#/definitions/prometheusAlert" },
             "configNotLoaded": { "$ref": "#/definitions/prometheusAlert" },
             "addressPoolExhausted": { "$ref": "#/definitions/prometheusAlert" },
@@ -279,8 +297,26 @@
                 }
               }
             },
+            "runtimeClassName": {
+              "type": "string"
+            },
             "secretName": {
               "type": "string"
+            },
+            "frr": {
+              "description": "Install FRR container in speaker deployment",
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "logLevel": {
+                  "type": "string",
+                  "enum": [ "informational", "warning", "errors", "debugging" ]
+                },
+                "image": { "$ref": "#/definitions/component/properties/image" }
+              },
+              "required": [ "enabled" ]
             }
           },
           "required": [ "tolerateMaster" ]

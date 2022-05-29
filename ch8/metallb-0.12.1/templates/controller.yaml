@@ -33,9 +33,10 @@ spec:
       {{- end }}
       serviceAccountName: {{ template "metallb.controller.serviceAccountName" . }}
       terminationGracePeriodSeconds: 0
+{{- if .Values.controller.securityContext }}
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 65534 # nobody
+{{ toYaml .Values.controller.securityContext | indent 8 }}
+{{- end }}
       containers:
       - name: controller
         image: {{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag | default .Chart.AppVersion }}
@@ -45,6 +46,9 @@ spec:
         args:
         - --port={{ .Values.prometheus.metricsPort }}
         - --config={{ template "metallb.configMapName" . }}
+        {{- with .Values.controller.logLevel }}
+        - --log-level={{ . }}
+        {{- end }}
         env:
         {{- if and .Values.speaker.enabled .Values.speaker.memberlist.enabled }}
         - name: METALLB_ML_SECRET_NAME
@@ -53,13 +57,13 @@ spec:
           value: {{ template "metallb.fullname" . }}-controller
         {{- end }}
         ports:
-        - name: metrics
+        - name: monitoring
           containerPort: {{ .Values.prometheus.metricsPort }}
         {{- if .Values.controller.livenessProbe.enabled }}
         livenessProbe:
           httpGet:
             path: /metrics
-            port: metrics
+            port: monitoring
           initialDelaySeconds: {{ .Values.controller.livenessProbe.initialDelaySeconds }}
           periodSeconds: {{ .Values.controller.livenessProbe.periodSeconds }}
           timeoutSeconds: {{ .Values.controller.livenessProbe.timeoutSeconds }}
@@ -70,7 +74,7 @@ spec:
         readinessProbe:
           httpGet:
             path: /metrics
-            port: metrics
+            port: monitoring
           initialDelaySeconds: {{ .Values.controller.readinessProbe.initialDelaySeconds }}
           periodSeconds: {{ .Values.controller.readinessProbe.periodSeconds }}
           timeoutSeconds: {{ .Values.controller.readinessProbe.timeoutSeconds }}
@@ -99,5 +103,8 @@ spec:
       {{- with .Values.controller.tolerations }}
       tolerations:
         {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- with .Values.controller.priorityClassName }}
+      priorityClassName: {{ . | quote }}
       {{- end }}
 {{- end }}

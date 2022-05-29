@@ -45,11 +45,22 @@ prometheus:
   # port both controller and speaker will listen on for metrics
   metricsPort: 7472
 
+  # the service account used by prometheus
+  # required when .Values.prometheus.podMonitor.enabled == true
+  serviceAccount: ""
+
+  # the namespace where prometheus is deployed
+  # required when .Values.prometheus.podMonitor.enabled == true
+  namespace: ""
+
   # Prometheus Operator PodMonitors
   podMonitor:
 
     # enable support for Prometheus Operator
     enabled: false
+
+    # optional additionnal labels for podMonitors
+    additionalLabels: {}
 
     # Job label for scrape target
     jobLabel: "app.kubernetes.io/name"
@@ -77,6 +88,9 @@ prometheus:
 
     # enable alertmanager alerts
     enabled: false
+
+    # optional additionnal labels for prometheusRules
+    additionalLabels: {}
 
     # MetalLBStaleConfig
     staleConfig:
@@ -121,6 +135,8 @@ prometheus:
 # controller.
 controller:
   enabled: true
+  # -- Controller log level. Must be one of: `all`, `debug`, `info`, `warn`, `error` or `none`
+  logLevel: info
   image:
     repository: quay.io/metallb/controller
     tag:
@@ -132,12 +148,18 @@ controller:
     # true, a name is generated using the fullname template
     name: ""
     annotations: {}
+  securityContext:
+    runAsNonRoot: true
+    # nobody
+    runAsUser: 65534
+    fsGroup: 65534
   resources: {}
     # limits:
       # cpu: 100m
       # memory: 100Mi
   nodeSelector: {}
   tolerations: []
+  priorityClassName: ""
   affinity: {}
   podAnnotations: {}
   livenessProbe:
@@ -159,6 +181,8 @@ controller:
 # daemonset.
 speaker:
   enabled: true
+  # -- Speaker log level. Must be one of: `all`, `debug`, `info`, `warn`, `error` or `none`
+  logLevel: info
   tolerateMaster: true
   memberlist:
     enabled: true
@@ -184,7 +208,10 @@ speaker:
       # memory: 100Mi
   nodeSelector: {}
   tolerations: []
+  priorityClassName: ""
   affinity: {}
+  ## Selects which runtime class will be used by the pod.
+  # runtimeClassName:
   podAnnotations: {}
   livenessProbe:
     enabled: true
@@ -200,3 +227,15 @@ speaker:
     periodSeconds: 10
     successThreshold: 1
     timeoutSeconds: 1
+  # frr contains configuration specific to the MetalLB FRR container,
+  # for speaker running alongside FRR.
+  frr:
+    enabled: false
+    # FRR_LOGGING_LEVEL used to set logging level for all running frr processes.
+    # Possible settings are :-
+    #  informational, warning, errors and debugging.
+    logLevel: informational
+    image:
+      repository: quay.io/frrouting/frr
+      tag: stable_7.5
+      pullPolicy:
