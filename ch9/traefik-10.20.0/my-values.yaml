@@ -478,7 +478,8 @@ affinity:
             - key: app.kubernetes.io/name
               operator: In
               values:
-                - {{ template "traefik.name" . }}
+              - traefik
+                # - {{ template "traefik.name" . }}
         topologyKey: kubernetes.io/hostname
 nodeSelector: {}
 tolerations: []
