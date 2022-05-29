@@ -91,7 +91,7 @@ image:
   debug: false
 ## @param architecture MySQL architecture (`standalone` or `replication`)
 ##
-architecture: standalone
+architecture: replication
 ## MySQL Authentication parameters
 ##
 auth:
@@ -400,7 +400,7 @@ primary:
     ##   set, choosing the default provisioner.  (gp2 on AWS, standard on
     ##   GKE, AWS & OpenStack)
     ##
-    storageClass: ""
+    storageClass: "openebs-hostpath"
     ## @param primary.persistence.annotations MySQL primary persistent volume claim annotations
     ##
     annotations: {}
@@ -752,7 +752,7 @@ secondary:
     ##   set, choosing the default provisioner.  (gp2 on AWS, standard on
     ##   GKE, AWS & OpenStack)
     ##
-    storageClass: ""
+    storageClass: "openebs-hostpath"
     ## @param secondary.persistence.annotations MySQL secondary persistent volume claim annotations
     ##
     annotations: {}
