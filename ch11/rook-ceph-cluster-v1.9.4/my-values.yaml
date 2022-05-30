@@ -95,7 +95,7 @@ cephClusterSpec:
   mon:
     # Set the number of mons to be started. Generally recommended to be 3.
     # For highest availability, an odd number of mons should be specified.
-    count: 3
+    count: 1
     # The mons should be on unique nodes. For production, at least 3 nodes are recommended for this reason.
     # Mons should only be allowed on the same node for test environments where data loss is acceptable.
     allowMultiplePerNode: false
@@ -104,7 +104,7 @@ cephClusterSpec:
     # When higher availability of the mgr is needed, increase the count to 2.
     # In that case, one mgr will be active and one in standby. When Ceph updates which
     # mgr is active, Rook will update the mgr services to match the active mgr.
-    count: 2
+    count: 1
     allowMultiplePerNode: false
     modules:
       # Several modules should not need to be included in this list. The "dashboard" and "monitoring" modules
@@ -243,14 +243,14 @@ cephClusterSpec:
         cpu: "2000m"
         memory: "2Gi"
       requests:
-        cpu: "1000m"
+        cpu: "100m"
         memory: "1Gi"
     osd:
       limits:
         cpu: "2000m"
         memory: "4Gi"
       requests:
-        cpu: "1000m"
+        cpu: "100m"
         memory: "4Gi"
     prepareosd:
       limits:
@@ -394,7 +394,7 @@ cephBlockPools:
     storageClass:
       enabled: true
       name: ceph-block
-      isDefault: true
+      isDefault: false
       reclaimPolicy: Delete
       allowVolumeExpansion: true
       mountOptions: []
@@ -455,7 +455,7 @@ cephFileSystems:
             memory: "4Gi"
         priorityClassName: system-cluster-critical
     storageClass:
-      enabled: true
+      enabled: false
       isDefault: false
       name: ceph-filesystem
       # (Optional) specify a data pool to use, must be the name of one of the data pools above, 'data0' by default
@@ -488,7 +488,7 @@ cephFileSystemVolumeSnapshotClass:
   parameters: {}
 
 cephBlockPoolsVolumeSnapshotClass:
-  enabled: false
+  enabled: true
   name: ceph-block
   isDefault: false
   deletionPolicy: Delete
@@ -528,7 +528,7 @@ cephObjectStores:
         bucket:
           interval: 60s
     storageClass:
-      enabled: true
+      enabled: false
       name: ceph-bucket
       reclaimPolicy: Delete
       # see https://github.com/rook/rook/blob/master/Documentation/ceph-object-bucket-claim.md#storageclass for available configuration
