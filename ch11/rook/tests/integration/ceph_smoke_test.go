@@ -61,15 +61,6 @@ import (
 // - Quota limit wrt no of objects
 // ************************************************
 func TestCephSmokeSuite(t *testing.T) {
-	if installer.SkipTestSuite(installer.CephTestSuite) {
-		t.Skip()
-	}
-
-	// Skip the suite if CSI is not supported
-	kh, err := utils.CreateK8sHelper(func() *testing.T { return t })
-	require.NoError(t, err)
-	checkSkipCSITest(t, kh)
-
 	s := new(SmokeSuite)
 	defer func(s *SmokeSuite) {
 		HandlePanics(recover(), s.TearDownSuite, s.T)
@@ -96,15 +87,17 @@ func (s *SmokeSuite) SetupSuite() {
 		UsePVC:                    installer.UsePVC(),
 		Mons:                      3,
 		SkipOSDCreation:           false,
-		UseCSI:                    true,
 		EnableAdmissionController: true,
+		ConnectionsEncrypted:      true,
+		ConnectionsCompressed:     true,
 		UseCrashPruner:            true,
 		EnableVolumeReplication:   true,
+		ChangeHostName:            true,
 		RookVersion:               installer.LocalBuildTag,
-		CephVersion:               installer.PacificVersion,
+		CephVersion:               installer.ReturnCephVersion(),
 	}
 	s.settings.ApplyEnvVars()
-	s.installer, s.k8sh = StartTestCluster(s.T, s.settings, smokeSuiteMinimalTestVersion)
+	s.installer, s.k8sh = StartTestCluster(s.T, s.settings)
 	s.helper = clients.CreateTestClient(s.k8sh, s.installer.Manifests)
 }
 
@@ -129,7 +122,10 @@ func (s *SmokeSuite) TestObjectStorage_SmokeTest() {
 	if utils.IsPlatformOpenShift() {
 		s.T().Skip("object store tests skipped on openshift")
 	}
-	runObjectE2ETest(s.helper, s.k8sh, s.Suite, s.settings.Namespace)
+	storeName := "lite-store"
+	deleteStore := true
+	tls := false
+	runObjectE2ETestLite(s.T(), s.helper, s.k8sh, s.installer, s.settings.Namespace, storeName, 2, deleteStore, tls)
 }
 
 // Test to make sure all rook components are installed and Running
@@ -147,52 +143,45 @@ func (s *SmokeSuite) TestMonFailover() {
 	require.NoError(s.T(), err)
 	require.Equal(s.T(), 3, len(deployments))
 
+	// Scale down a mon so the operator won't trigger a reconcile
 	monToKill := deployments[0].Name
-	logger.Infof("Killing mon %s", monToKill)
-	propagation := metav1.DeletePropagationForeground
-	delOptions := &metav1.DeleteOptions{PropagationPolicy: &propagation}
-	err = s.k8sh.Clientset.AppsV1().Deployments(s.settings.Namespace).Delete(ctx, monToKill, *delOptions)
-	require.NoError(s.T(), err)
+	logger.Infof("Scaling down mon %s", monToKill)
+	scale, err := s.k8sh.Clientset.AppsV1().Deployments(s.settings.Namespace).GetScale(ctx, monToKill, metav1.GetOptions{})
+	assert.NoError(s.T(), err)
+	scale.Spec.Replicas = 0
+	_, err = s.k8sh.Clientset.AppsV1().Deployments(s.settings.Namespace).UpdateScale(ctx, monToKill, scale, metav1.UpdateOptions{})
+	assert.NoError(s.T(), err)
 
 	// Wait for the health check to start a new monitor
-	originalMonDeleted := false
 	for i := 0; i < 30; i++ {
 		deployments, err := s.getNonCanaryMonDeployments()
 		require.NoError(s.T(), err)
 
-		// Make sure the old mon is not still alive
-		foundOldMon := false
-		for _, mon := range deployments {
+		var currentMons []string
+		var originalMonDeployment *appsv1.Deployment
+		for i, mon := range deployments {
+			currentMons = append(currentMons, mon.Name)
 			if mon.Name == monToKill {
-				foundOldMon = true
+				originalMonDeployment = &deployments[i]
 			}
 		}
+		logger.Infof("mon deployments: %v", currentMons)
 
-		// Check if we have three monitors
-		if foundOldMon {
-			if originalMonDeleted {
-				// Depending on the state of the orchestration, the operator might trigger
-				// re-creation of the deleted mon. In this case, consider the test successful
-				// rather than wait for the failover which will never occur.
-				logger.Infof("Original mon created again, no need to wait for mon failover")
-				return
-			}
-			logger.Infof("Waiting for old monitor to stop")
-		} else {
-			logger.Infof("Waiting for a new monitor to start")
-			originalMonDeleted = true
-			if len(deployments) == 3 {
-				var newMons []string
-				for _, mon := range deployments {
-					newMons = append(newMons, mon.Name)
-				}
-				logger.Infof("Found a new monitor! monitors=%v", newMons)
-				return
-			}
-
-			assert.Equal(s.T(), 2, len(deployments))
+		// Check if the original mon was scaled up again
+		// Depending on the state of the orchestration, the operator might trigger
+		// re-creation of the deleted mon. In this case, consider the test successful
+		// rather than wait for the failover which will never occur.
+		if originalMonDeployment != nil && *originalMonDeployment.Spec.Replicas > 0 {
+			logger.Infof("Original mon created again, no need to wait for mon failover")
+			return
 		}
 
+		if len(deployments) == 3 && originalMonDeployment == nil {
+			logger.Infof("Found a new monitor!")
+			return
+		}
+
+		logger.Infof("Waiting for a new monitor to start and previous one to be deleted")
 		time.Sleep(5 * time.Second)
 	}
 
@@ -209,7 +198,7 @@ func (s *SmokeSuite) TestPoolResize() {
 	require.NoError(s.T(), err)
 
 	poolFound := false
-	clusterInfo := client.AdminClusterInfo(s.settings.Namespace)
+	clusterInfo := client.AdminTestClusterInfo(s.settings.Namespace)
 
 	// Wait for pool to appear
 	for i := 0; i < 10; i++ {
@@ -286,7 +275,7 @@ func (s *SmokeSuite) TestCreateClient() {
 		"mgr": "allow rwx",
 		"osd": "allow rwx",
 	}
-	clusterInfo := client.AdminClusterInfo(s.settings.Namespace)
+	clusterInfo := client.AdminTestClusterInfo(s.settings.Namespace)
 	err := s.helper.UserClient.Create(clientName, s.settings.Namespace, caps)
 	require.NoError(s.T(), err)
 

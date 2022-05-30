@@ -17,11 +17,10 @@ limitations under the License.
 package mon
 
 import (
-	"sync"
+	"context"
 	"testing"
 
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
-	"github.com/rook/rook/pkg/apis/rook.io"
 	"github.com/rook/rook/pkg/clusterd"
 	cephclient "github.com/rook/rook/pkg/daemon/ceph/client"
 	"github.com/rook/rook/pkg/operator/ceph/config"
@@ -45,11 +44,11 @@ func testPodSpec(t *testing.T, monID string, pvc bool) {
 	clientset := testop.New(t, 1)
 	ownerInfo := cephclient.NewMinimumOwnerInfoWithOwnerRef()
 	c := New(
+		context.TODO(),
 		&clusterd.Context{Clientset: clientset, ConfigDir: "/var/lib/rook"},
 		"ns",
 		cephv1.ClusterSpec{},
 		ownerInfo,
-		&sync.Mutex{},
 	)
 	setCommonMonProperties(c, 0, cephv1.MonSpec{Count: 3, AllowMultiplePerNode: true}, "rook/rook:myversion")
 	c.spec.CephVersion = cephv1.CephVersionSpec{Image: "quay.io/ceph/ceph:myceph"}
@@ -64,7 +63,7 @@ func testPodSpec(t *testing.T, monID string, pvc bool) {
 			v1.ResourceMemory: *resource.NewQuantity(500.0, resource.BinarySI),
 		},
 	}
-	c.spec.PriorityClassNames = map[rook.KeyType]string{
+	c.spec.PriorityClassNames = map[cephv1.KeyType]string{
 		cephv1.KeyMon: "my-priority-class",
 	}
 	monConfig := testGenMonConfig(monID)
@@ -83,23 +82,35 @@ func testPodSpec(t *testing.T, monID string, pvc bool) {
 
 	// Deployment should have Ceph labels
 	test.AssertLabelsContainCephRequirements(t, d.ObjectMeta.Labels,
-		config.MonType, monID, AppName, "ns")
+		config.MonType, monID, AppName, "ns", "default", "cephclusters.ceph.rook.io", "ceph-mon")
 
 	podTemplate := test.NewPodTemplateSpecTester(t, &d.Spec.Template)
 	podTemplate.RunFullSuite(config.MonType, monID, AppName, "ns", "quay.io/ceph/ceph:myceph",
 		"200", "100", "1337", "500", /* resources */
-		"my-priority-class")
+		"my-priority-class", "default", "cephclusters.ceph.rook.io", "ceph-mon")
+
+	t.Run(("check mon ConfigureProbe"), func(t *testing.T) {
+		c.spec.HealthCheck.StartupProbe = make(map[cephv1.KeyType]*cephv1.ProbeSpec)
+		c.spec.HealthCheck.StartupProbe[cephv1.KeyMon] = &cephv1.ProbeSpec{Disabled: false, Probe: &v1.Probe{InitialDelaySeconds: 1000}}
+		c.spec.HealthCheck.LivenessProbe = make(map[cephv1.KeyType]*cephv1.ProbeSpec)
+		c.spec.HealthCheck.LivenessProbe[cephv1.KeyMon] = &cephv1.ProbeSpec{Disabled: false, Probe: &v1.Probe{InitialDelaySeconds: 900}}
+		container := c.makeMonDaemonContainer(monConfig)
+		assert.NotNil(t, container.LivenessProbe)
+		assert.NotNil(t, container.StartupProbe)
+		assert.Equal(t, int32(900), container.LivenessProbe.InitialDelaySeconds)
+		assert.Equal(t, int32(1000), container.StartupProbe.InitialDelaySeconds)
+	})
 }
 
 func TestDeploymentPVCSpec(t *testing.T) {
 	clientset := testop.New(t, 1)
 	ownerInfo := cephclient.NewMinimumOwnerInfoWithOwnerRef()
 	c := New(
+		context.TODO(),
 		&clusterd.Context{Clientset: clientset, ConfigDir: "/var/lib/rook"},
 		"ns",
 		cephv1.ClusterSpec{},
 		ownerInfo,
-		&sync.Mutex{},
 	)
 	setCommonMonProperties(c, 0, cephv1.MonSpec{Count: 3, AllowMultiplePerNode: true}, "rook/rook:myversion")
 	c.spec.CephVersion = cephv1.CephVersionSpec{Image: "quay.io/ceph/ceph:myceph"}
@@ -155,11 +166,11 @@ func TestDeploymentPVCSpec(t *testing.T) {
 
 func testRequiredDuringScheduling(t *testing.T, hostNetwork, allowMultiplePerNode, required bool) {
 	c := New(
+		context.TODO(),
 		&clusterd.Context{},
 		"ns",
 		cephv1.ClusterSpec{},
 		&k8sutil.OwnerInfo{},
-		&sync.Mutex{},
 	)
 
 	c.spec.Network.HostNetwork = hostNetwork

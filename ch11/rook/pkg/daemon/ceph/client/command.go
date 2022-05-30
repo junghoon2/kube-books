@@ -96,16 +96,18 @@ type CephToolCommand struct {
 	args            []string
 	timeout         time.Duration
 	JsonOutput      bool
+	combinedOutput  bool
 	RemoteExecution bool
 }
 
 func newCephToolCommand(tool string, context *clusterd.Context, clusterInfo *ClusterInfo, args []string) *CephToolCommand {
 	return &CephToolCommand{
-		context:     context,
-		tool:        tool,
-		clusterInfo: clusterInfo,
-		args:        args,
-		JsonOutput:  true,
+		context:        context,
+		tool:           tool,
+		clusterInfo:    clusterInfo,
+		args:           args,
+		JsonOutput:     true,
+		combinedOutput: false,
 	}
 }
 
@@ -126,6 +128,11 @@ func NewRBDCommand(context *clusterd.Context, clusterInfo *ClusterInfo, args []s
 }
 
 func (c *CephToolCommand) run() ([]byte, error) {
+	// Return if the context has been canceled
+	if c.clusterInfo.Context.Err() != nil {
+		return nil, c.clusterInfo.Context.Err()
+	}
+
 	// Initialize the command and args
 	command := c.tool
 	args := c.args
@@ -158,15 +165,21 @@ func (c *CephToolCommand) run() ([]byte, error) {
 	// Still forcing the check for the command if the behavior changes in the future
 	if command == RBDTool {
 		if c.RemoteExecution {
-			output, stderr, err = c.context.RemoteExecutor.ExecCommandInContainerWithFullOutputWithTimeout(ProxyAppLabel, CommandProxyInitContainerName, c.clusterInfo.Namespace, append([]string{command}, args...)...)
-			output = fmt.Sprintf("%s. %s", output, stderr)
+			output, stderr, err = c.context.RemoteExecutor.ExecCommandInContainerWithFullOutputWithTimeout(c.clusterInfo.Context, ProxyAppLabel, CommandProxyInitContainerName, c.clusterInfo.Namespace, append([]string{command}, args...)...)
+			if stderr != "" || err != nil {
+				err = errors.Errorf("%s. %s", err.Error(), stderr)
+			}
 		} else if c.timeout == 0 {
 			output, err = c.context.Executor.ExecuteCommandWithOutput(command, args...)
 		} else {
 			output, err = c.context.Executor.ExecuteCommandWithTimeout(c.timeout, command, args...)
 		}
 	} else if c.timeout == 0 {
-		output, err = c.context.Executor.ExecuteCommandWithOutput(command, args...)
+		if c.combinedOutput {
+			output, err = c.context.Executor.ExecuteCommandWithCombinedOutput(command, args...)
+		} else {
+			output, err = c.context.Executor.ExecuteCommandWithOutput(command, args...)
+		}
 	} else {
 		output, err = c.context.Executor.ExecuteCommandWithTimeout(c.timeout, command, args...)
 	}

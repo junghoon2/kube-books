@@ -18,7 +18,6 @@ limitations under the License.
 package client
 
 import (
-	"context"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -47,6 +46,8 @@ const (
 	DefaultKeyringFile = "keyring"
 	// Msgr2port is the listening port of the messenger v2 protocol
 	Msgr2port = 3300
+	// Msgr1port is the listening port of the messenger v1 protocol
+	Msgr1port = 6789
 )
 
 var (
@@ -61,13 +62,9 @@ var (
 
 // GlobalConfig represents the [global] sections of Ceph's config file.
 type GlobalConfig struct {
-	FSID           string `ini:"fsid,omitempty"`
-	MonMembers     string `ini:"mon initial members,omitempty"`
-	MonHost        string `ini:"mon host"`
-	PublicAddr     string `ini:"public addr,omitempty"`
-	PublicNetwork  string `ini:"public network,omitempty"`
-	ClusterAddr    string `ini:"cluster addr,omitempty"`
-	ClusterNetwork string `ini:"cluster network,omitempty"`
+	FSID       string `ini:"fsid,omitempty"`
+	MonMembers string `ini:"mon initial members,omitempty"`
+	MonHost    string `ini:"mon host"`
 }
 
 // CephConfig represents an entire Ceph config including all sections.
@@ -115,7 +112,7 @@ func generateConfigFile(context *clusterd.Context, clusterInfo *ClusterInfo, pat
 
 	// create the config directory
 	if err := os.MkdirAll(pathRoot, 0744); err != nil {
-		logger.Warningf("failed to create config directory at %q. %v", pathRoot, err)
+		return "", errors.Wrapf(err, "failed to create config directory at %q", pathRoot)
 	}
 
 	configFile, err := createGlobalConfigFileSection(context, clusterInfo, globalConfig)
@@ -143,8 +140,7 @@ func generateConfigFile(context *clusterd.Context, clusterInfo *ClusterInfo, pat
 }
 
 func mergeDefaultConfigWithRookConfigOverride(clusterdContext *clusterd.Context, clusterInfo *ClusterInfo, configFile *ini.File) error {
-	ctx := context.TODO()
-	cm, err := clusterdContext.Clientset.CoreV1().ConfigMaps(clusterInfo.Namespace).Get(ctx, k8sutil.ConfigOverrideName, metav1.GetOptions{})
+	cm, err := clusterdContext.Clientset.CoreV1().ConfigMaps(clusterInfo.Namespace).Get(clusterInfo.Context, k8sutil.ConfigOverrideName, metav1.GetOptions{})
 	if err != nil {
 		if !kerrors.IsNotFound(err) {
 			return errors.Wrapf(err, "failed to read configmap %q", k8sutil.ConfigOverrideName)
@@ -194,17 +190,13 @@ func CreateDefaultCephConfig(context *clusterd.Context, clusterInfo *ClusterInfo
 
 	// extract a list of just the monitor names, which will populate the "mon initial members"
 	// and "mon hosts" global config field
-	monMembers, monHosts := PopulateMonHostMembers(clusterInfo.Monitors)
+	monMembers, monHosts := PopulateMonHostMembers(clusterInfo)
 
 	conf := &CephConfig{
 		GlobalConfig: &GlobalConfig{
-			FSID:           clusterInfo.FSID,
-			MonMembers:     strings.Join(monMembers, " "),
-			MonHost:        strings.Join(monHosts, ","),
-			PublicAddr:     context.NetworkInfo.PublicAddr,
-			PublicNetwork:  context.NetworkInfo.PublicNetwork,
-			ClusterAddr:    context.NetworkInfo.ClusterAddr,
-			ClusterNetwork: context.NetworkInfo.ClusterNetwork,
+			FSID:       clusterInfo.FSID,
+			MonMembers: strings.Join(monMembers, " "),
+			MonHost:    strings.Join(monHosts, ","),
 		},
 	}
 
@@ -254,25 +246,28 @@ func addClientConfigFileSection(configFile *ini.File, clientName, keyringPath st
 
 // PopulateMonHostMembers extracts a list of just the monitor names, which will populate the "mon initial members"
 // and "mon hosts" global config field
-func PopulateMonHostMembers(monitors map[string]*MonInfo) ([]string, []string) {
-	monMembers := make([]string, len(monitors))
-	monHosts := make([]string, len(monitors))
+func PopulateMonHostMembers(clusterInfo *ClusterInfo) ([]string, []string) {
+	monMembers := make([]string, len(clusterInfo.Monitors))
+	monHosts := make([]string, len(clusterInfo.Monitors))
 
 	i := 0
-	for _, monitor := range monitors {
+	for _, monitor := range clusterInfo.Monitors {
 		monMembers[i] = monitor.Name
 		monIP := cephutil.GetIPFromEndpoint(monitor.Endpoint)
-
-		// This tries to detect the current port if the mon already exists
-		// This basically handles the transition between monitors running on 6790 to msgr2
-		// So whatever the previous monitor port was we keep it
-		currentMonPort := cephutil.GetPortFromEndpoint(monitor.Endpoint)
-
-		monPorts := [2]string{strconv.Itoa(int(Msgr2port)), strconv.Itoa(int(currentMonPort))}
-		msgr2Endpoint := net.JoinHostPort(monIP, monPorts[0])
-		msgr1Endpoint := net.JoinHostPort(monIP, monPorts[1])
-
-		monHosts[i] = "[v2:" + msgr2Endpoint + ",v1:" + msgr1Endpoint + "]"
+		if clusterInfo.RequireMsgr2 {
+			monHosts[i] = fmt.Sprintf("[v2:%s:%d]", monIP, Msgr2port)
+		} else {
+			// Detect the current port if the mon already exists
+			// so the same msgr1 port can be preserved if needed (6789 or 6790)
+			currentMonPort := cephutil.GetPortFromEndpoint(monitor.Endpoint)
+			// Ensure we're setting a msgr1 port, rather than duplicating msgr2
+			if currentMonPort == Msgr2port {
+				currentMonPort = Msgr1port
+			}
+			msgr2Endpoint := net.JoinHostPort(monIP, strconv.Itoa(int(Msgr2port)))
+			msgr1Endpoint := net.JoinHostPort(monIP, strconv.Itoa(int(currentMonPort)))
+			monHosts[i] = "[v2:" + msgr2Endpoint + ",v1:" + msgr1Endpoint + "]"
+		}
 		i++
 	}
 
@@ -302,7 +297,7 @@ func WriteCephConfig(context *clusterd.Context, clusterInfo *ClusterInfo) error 
 	}
 	dst, err := ioutil.ReadFile(DefaultConfigFilePath())
 	if err == nil {
-		logger.Debugf("config file @ %s: %s", DefaultConfigFilePath(), dst)
+		logger.Debugf("config file @ %s:\n%s", DefaultConfigFilePath(), dst)
 	} else {
 		logger.Warningf("wrote and copied config file but failed to read it back from %s for logging. %v", DefaultConfigFilePath(), err)
 	}

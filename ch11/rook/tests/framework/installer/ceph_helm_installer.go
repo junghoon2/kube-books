@@ -22,7 +22,10 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/rook/rook/tests/framework/utils"
+	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v2"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -33,93 +36,160 @@ const (
 
 // The Ceph Storage CustomResource and StorageClass names used in testing
 const (
-	blockPoolName     = "ceph-block-test"
-	blockPoolSCName   = "ceph-block-test-sc"
-	filesystemName    = "ceph-filesystem-test"
-	filesystemSCName  = "ceph-filesystem-test-sc"
-	objectStoreName   = "ceph-objectstore-test"
-	objectStoreSCName = "ceph-bucket-test-sc"
+	BlockPoolName     = "ceph-block-test"
+	BlockPoolSCName   = "ceph-block-test-sc"
+	FilesystemName    = "ceph-filesystem-test"
+	FilesystemSCName  = "ceph-filesystem-test-sc"
+	ObjectStoreName   = "ceph-objectstore-test"
+	ObjectStoreSCName = "ceph-bucket-test-sc"
 )
 
 // CreateRookOperatorViaHelm creates rook operator via Helm chart named local/rook present in local repo
-func (h *CephInstaller) CreateRookOperatorViaHelm(values map[string]interface{}) error {
+func (h *CephInstaller) CreateRookOperatorViaHelm() error {
+	return h.configureRookOperatorViaHelm(false)
+}
+
+func (h *CephInstaller) UpgradeRookOperatorViaHelm() error {
+	return h.configureRookOperatorViaHelm(true)
+}
+
+func (h *CephInstaller) configureRookOperatorViaHelm(upgrade bool) error {
+	values := map[string]interface{}{
+		"enableDiscoveryDaemon": h.settings.EnableDiscovery,
+		"image":                 map[string]interface{}{"tag": h.settings.RookVersion},
+		"monitoring":            map[string]interface{}{"enabled": true},
+	}
+	values["csi"] = map[string]interface{}{
+		"csiRBDProvisionerResource":    nil,
+		"csiRBDPluginResource":         nil,
+		"csiCephFSProvisionerResource": nil,
+		"csiCephFSPluginResource":      nil,
+	}
+
 	// create the operator namespace before the admission controller is created
 	if err := h.k8shelper.CreateNamespace(h.settings.OperatorNamespace); err != nil {
 		return errors.Errorf("failed to create namespace %s. %v", h.settings.Namespace, err)
 	}
 	if err := h.startAdmissionController(); err != nil {
-		return errors.Errorf("Failed to start admission controllers: %v", err)
+		return errors.Errorf("failed to start admission controllers. %v", err)
 	}
-	if err := h.helmHelper.InstallLocalRookHelmChart(h.settings.OperatorNamespace, OperatorChartName, values); err != nil {
-		return errors.Errorf("failed to install rook operator via helm, err : %v", err)
+	if h.settings.RookVersion == LocalBuildTag {
+		if err := h.helmHelper.InstallLocalHelmChart(upgrade, h.settings.OperatorNamespace, OperatorChartName, values); err != nil {
+			return errors.Errorf("failed to install rook operator via helm, err : %v", err)
+		}
+	} else {
+		// Install a specific version of the chart, from which the test will upgrade later
+		if err := h.helmHelper.InstallVersionedChart(h.settings.OperatorNamespace, OperatorChartName, h.settings.RookVersion, values); err != nil {
+			return errors.Errorf("failed to install rook operator via helm, err : %v", err)
+		}
 	}
 
 	return nil
 }
 
 // CreateRookCephClusterViaHelm creates rook cluster via Helm
-func (h *CephInstaller) CreateRookCephClusterViaHelm(values map[string]interface{}) error {
-	var err error
-	h.settings.DataDirHostPath, err = h.initTestDir(h.settings.Namespace)
-	if err != nil {
-		return err
+func (h *CephInstaller) CreateRookCephClusterViaHelm() error {
+	return h.configureRookCephClusterViaHelm(false)
+}
+func (h *CephInstaller) UpgradeRookCephClusterViaHelm() error {
+	return h.configureRookCephClusterViaHelm(true)
+}
+func (h *CephInstaller) configureRookCephClusterViaHelm(upgrade bool) error {
+	values := map[string]interface{}{
+		"image": "rook/ceph:" + h.settings.RookVersion,
+	}
+
+	// Set the host path the first time, but use the same path for an upgrade
+	if h.settings.DataDirHostPath == "" {
+		var err error
+		h.settings.DataDirHostPath, err = h.initTestDir(h.settings.Namespace)
+		if err != nil {
+			return err
+		}
 	}
 
 	var clusterCRD map[string]interface{}
 	if err := yaml.Unmarshal([]byte(h.Manifests.GetCephCluster()), &clusterCRD); err != nil {
 		return err
 	}
+	values["cephClusterSpec"] = clusterCRD["spec"]
 
 	values["operatorNamespace"] = h.settings.OperatorNamespace
 	values["configOverride"] = clusterCustomSettings
 	values["toolbox"] = map[string]interface{}{
-		"enabled": true,
-		"image":   "rook/ceph:" + LocalBuildTag,
+		"enabled":   true,
+		"image":     "rook/ceph:" + h.settings.RookVersion,
+		"resources": nil,
 	}
-	values["cephClusterSpec"] = clusterCRD["spec"]
+	values["monitoring"] = map[string]interface{}{
+		"enabled":              true,
+		"createPromtheusRules": true,
+	}
+	values["ingress"] = map[string]interface{}{
+		"dashboard": map[string]interface{}{
+			"annotations": map[string]interface{}{
+				"kubernetes.io/ingress-class":                "nginx",
+				"nginx.ingress.kubernetes.io/rewrite-target": "/ceph-dashboard/$2",
+			},
+			"host": map[string]interface{}{
+				"name": "localhost",
+				"path": "/ceph-dashboard(/|$)(.*)",
+			},
+		},
+	}
+	if !utils.VersionAtLeast(h.settings.KubernetesVersion, "v1.17.0") {
+		values["cephFilesystems"] = map[string]interface{}{}
+		values["cephObjectStores"] = map[string]interface{}{}
+	}
 
-	if err := h.CreateBlockPoolConfiguration(values, blockPoolName, blockPoolSCName); err != nil {
+	if err := h.CreateBlockPoolConfiguration(values, BlockPoolName, BlockPoolSCName); err != nil {
 		return err
 	}
-	if err := h.CreateFileSystemConfiguration(values, filesystemName, filesystemSCName); err != nil {
+	if err := h.CreateFileSystemConfiguration(values, FilesystemName, FilesystemSCName); err != nil {
 		return err
 	}
-	if err := h.CreateObjectStoreConfiguration(values, objectStoreName, objectStoreSCName); err != nil {
+	if err := h.CreateObjectStoreConfiguration(values, ObjectStoreName, ObjectStoreSCName); err != nil {
 		return err
 	}
 
 	logger.Infof("Creating ceph cluster using Helm with values: %+v", values)
-	if err := h.helmHelper.InstallLocalRookHelmChart(h.settings.Namespace, CephClusterChartName, values); err != nil {
-		return err
+	if h.settings.RookVersion == LocalBuildTag {
+		if err := h.helmHelper.InstallLocalHelmChart(upgrade, h.settings.Namespace, CephClusterChartName, values); err != nil {
+			return err
+		}
+	} else {
+		// Install official version of the chart
+		if err := h.helmHelper.InstallVersionedChart(h.settings.Namespace, CephClusterChartName, h.settings.RookVersion, values); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-// RemoveRookCephClusterHelmDefaultCustomResources tidies up the helm created CRs and Storage Classes, as they interfere with other tests.
-func (h *CephInstaller) RemoveRookCephClusterHelmDefaultCustomResources() error {
-	if err := h.k8shelper.Clientset.StorageV1().StorageClasses().Delete(context.TODO(), blockPoolSCName, v1.DeleteOptions{}); err != nil {
-		return err
+// removeCephClusterHelmResources tidies up the helm created CRs and Storage Classes, as they interfere with other tests.
+func (h *CephInstaller) removeCephClusterHelmResources() {
+	if err := h.k8shelper.Clientset.StorageV1().StorageClasses().Delete(context.TODO(), BlockPoolSCName, v1.DeleteOptions{}); err != nil {
+		assert.True(h.T(), kerrors.IsNotFound(err))
 	}
-	if err := h.k8shelper.Clientset.StorageV1().StorageClasses().Delete(context.TODO(), filesystemSCName, v1.DeleteOptions{}); err != nil {
-		return err
+	if err := h.k8shelper.Clientset.StorageV1().StorageClasses().Delete(context.TODO(), FilesystemSCName, v1.DeleteOptions{}); err != nil {
+		assert.True(h.T(), kerrors.IsNotFound(err))
 	}
-	if err := h.k8shelper.Clientset.StorageV1().StorageClasses().Delete(context.TODO(), objectStoreSCName, v1.DeleteOptions{}); err != nil {
-		return err
+	if err := h.k8shelper.Clientset.StorageV1().StorageClasses().Delete(context.TODO(), ObjectStoreSCName, v1.DeleteOptions{}); err != nil {
+		assert.True(h.T(), kerrors.IsNotFound(err))
 	}
-	if err := h.k8shelper.RookClientset.CephV1().CephBlockPools(h.settings.Namespace).Delete(context.TODO(), blockPoolName, v1.DeleteOptions{}); err != nil {
-		return err
+	if err := h.k8shelper.RookClientset.CephV1().CephBlockPools(h.settings.Namespace).Delete(context.TODO(), BlockPoolName, v1.DeleteOptions{}); err != nil {
+		assert.True(h.T(), kerrors.IsNotFound(err))
 	}
-	if err := h.k8shelper.RookClientset.CephV1().CephFilesystems(h.settings.Namespace).Delete(context.TODO(), filesystemName, v1.DeleteOptions{}); err != nil {
-		return err
+	if err := h.k8shelper.RookClientset.CephV1().CephFilesystems(h.settings.Namespace).Delete(context.TODO(), FilesystemName, v1.DeleteOptions{}); err != nil {
+		assert.True(h.T(), kerrors.IsNotFound(err))
 	}
-	if err := h.k8shelper.RookClientset.CephV1().CephObjectStores(h.settings.Namespace).Delete(context.TODO(), objectStoreName, v1.DeleteOptions{}); err != nil {
-		return err
+	if err := h.k8shelper.RookClientset.CephV1().CephObjectStores(h.settings.Namespace).Delete(context.TODO(), ObjectStoreName, v1.DeleteOptions{}); err != nil {
+		assert.True(h.T(), kerrors.IsNotFound(err))
 	}
-	if !h.k8shelper.WaitUntilPodWithLabelDeleted(fmt.Sprintf("rook_object_store=%s", objectStoreName), h.settings.Namespace) {
-		return fmt.Errorf("rgw did not stop via crd")
+	if !h.k8shelper.WaitUntilPodWithLabelDeleted(fmt.Sprintf("rook_object_store=%s", ObjectStoreName), h.settings.Namespace) {
+		assert.Fail(h.T(), "rgw did not stop via helm uninstall")
 	}
-	return nil
 }
 
 // ConfirmHelmClusterInstalledCorrectly runs some validation to check whether the helm chart installed correctly.
@@ -131,11 +201,11 @@ func (h *CephInstaller) ConfirmHelmClusterInstalledCorrectly() error {
 
 	foundStorageClasses := 0
 	for _, storageClass := range storageClassList.Items {
-		if storageClass.Name == blockPoolSCName {
+		if storageClass.Name == BlockPoolSCName {
 			foundStorageClasses++
-		} else if storageClass.Name == filesystemSCName {
+		} else if storageClass.Name == FilesystemSCName {
 			foundStorageClasses++
-		} else if storageClass.Name == objectStoreSCName {
+		} else if storageClass.Name == ObjectStoreSCName {
 			foundStorageClasses++
 		}
 	}
@@ -223,7 +293,7 @@ func (h *CephInstaller) CreateObjectStoreConfiguration(values map[string]interfa
 		return err
 	}
 
-	storageClassBytes := []byte(h.Manifests.GetBucketStorageClass(name, scName, "Delete", "us-east-1"))
+	storageClassBytes := []byte(h.Manifests.GetBucketStorageClass(name, scName, "Delete"))
 	var testObjectStoreSC map[string]interface{}
 	if err := yaml.Unmarshal(storageClassBytes, &testObjectStoreSC); err != nil {
 		return err

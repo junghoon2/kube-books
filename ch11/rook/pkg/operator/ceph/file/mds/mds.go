@@ -91,7 +91,6 @@ var UpdateDeploymentAndWait = mon.UpdateCephDeploymentAndWait
 
 // Start starts or updates a Ceph mds cluster in Kubernetes.
 func (c *Cluster) Start() error {
-	ctx := context.TODO()
 	// Validate pod's memory if specified
 	err := controller.CheckPodMemory(cephv1.ResourcesKeyMDS, c.fs.Spec.MetadataServer.Resources, cephMdsPodMinimumMemory)
 	if err != nil {
@@ -131,7 +130,7 @@ func (c *Cluster) Start() error {
 	desiredDeployments := map[string]bool{} // improvised set
 	// Create/update deployments
 	for i := 0; i < int(replicas); i++ {
-		deployment, err := c.startDeployment(ctx, k8sutil.IndexToName(i))
+		deployment, err := c.startDeployment(c.clusterInfo.Context, k8sutil.IndexToName(i))
 		if err != nil {
 			return errors.Wrapf(err, "failed to start deployment for MDS %q for filesystem %q", k8sutil.IndexToName(i), c.fs.Name)
 		}
@@ -284,7 +283,7 @@ func (c *Cluster) upgradeMDS() error {
 	}
 
 	// 5. upgrade current active deployment and wait for it come back
-	_, err = c.startDeployment(context.TODO(), daemonLetterID)
+	_, err = c.startDeployment(c.clusterInfo.Context, daemonLetterID)
 	if err != nil {
 		return errors.Wrapf(err, "failed to upgrade mds %q", daemonName)
 	}
@@ -299,7 +298,7 @@ func (c *Cluster) upgradeMDS() error {
 
 func (c *Cluster) scaleDownDeployments(replicas int32, activeCount int32, desiredDeployments map[string]bool, delete bool) error {
 	// Remove extraneous mds deployments if they exist
-	deps, err := getMdsDeployments(c.context, c.fs.Namespace, c.fs.Name)
+	deps, err := getMdsDeployments(c.clusterInfo.Context, c.context, c.fs.Namespace, c.fs.Name)
 	if err != nil {
 		return errors.Wrapf(err,
 			fmt.Sprintf("cannot verify the removal of extraneous mds deployments for filesystem %s. ", c.fs.Name)+
@@ -332,13 +331,13 @@ func (c *Cluster) scaleDownDeployments(replicas int32, activeCount int32, desire
 			localdeployment := d
 			if !delete {
 				// stop mds daemon only by scaling deployment replicas to 0
-				if err := scaleMdsDeployment(c.context, c.fs.Namespace, &localdeployment, 0); err != nil {
+				if err := scaleMdsDeployment(c.clusterInfo.Context, c.context, c.fs.Namespace, &localdeployment, 0); err != nil {
 					errCount++
 					logger.Errorf("failed to scale mds deployment %q. %v", localdeployment.GetName(), err)
 				}
 				continue
 			}
-			if err := deleteMdsDeployment(c.context, c.fs.Namespace, &localdeployment); err != nil {
+			if err := deleteMdsDeployment(c.clusterInfo.Context, c.context, c.fs.Namespace, &localdeployment); err != nil {
 				errCount++
 				logger.Errorf("failed to delete mds deployment. %v", err)
 			}
@@ -386,8 +385,8 @@ func finishedWithDaemonUpgrade(context *clusterd.Context, clusterInfo *cephclien
 	activeMDSCount := fs.Spec.MetadataServer.ActiveCount
 	logger.Debugf("restoring filesystem %s from daemon upgrade", fsName)
 	logger.Debugf("bringing num active MDS daemons for fs %s back to %d", fsName, activeMDSCount)
-	// TODO: Unknown (Apr 2020) if this can be removed once Rook no longer supports Nautilus.
-	// upgrade guide according to nautilus https://docs.ceph.com/docs/nautilus/cephfs/upgrading/#upgrading-the-mds-cluster
+	// TODO: Unknown (Aug 2021) if this can be removed once Rook no longer supports Octopus.
+	// upgrade guide according to octopus https://docs.ceph.com/en/octopus/cephfs/upgrading/
 	if err := cephclient.SetNumMDSRanks(context, clusterInfo, fsName, activeMDSCount); err != nil {
 		return errors.Wrapf(err, "Failed to restore filesystem %s following daemon upgrade", fsName)
 	}

@@ -18,82 +18,73 @@ package csi
 
 import (
 	"bytes"
-	"io/ioutil"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"text/template"
 
-	"github.com/ghodss/yaml"
 	"github.com/pkg/errors"
-	"github.com/rook/rook/pkg/operator/ceph/controller"
 	k8sutil "github.com/rook/rook/pkg/operator/k8sutil"
 	apps "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
+	"k8s.io/apimachinery/pkg/util/yaml"
 )
 
-func loadTemplate(name, templatePath string, p templateParam) (string, error) {
-	b, err := ioutil.ReadFile(filepath.Clean(templatePath))
-	if err != nil {
-		return "", err
-	}
-	data := string(b)
+func loadTemplate(name, templateData string, p templateParam) ([]byte, error) {
 	var writer bytes.Buffer
 	t := template.New(name)
-	t, err = t.Parse(data)
+	t, err := t.Parse(templateData)
 	if err != nil {
-		return "", errors.Wrapf(err, "failed to parse template %v", name)
+		return nil, errors.Wrapf(err, "failed to parse template %v", name)
 	}
 	err = t.Execute(&writer, p)
-	return writer.String(), err
+	return writer.Bytes(), err
 }
 
-func templateToService(name, templatePath string, p templateParam) (*corev1.Service, error) {
+func templateToService(name, templateData string, p templateParam) (*corev1.Service, error) {
 	var svc corev1.Service
-	t, err := loadTemplate(name, templatePath, p)
+	t, err := loadTemplate(name, templateData, p)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to load service template")
 	}
 
-	err = yaml.Unmarshal([]byte(t), &svc)
+	err = yaml.Unmarshal(t, &svc)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to unmarshal service template")
 	}
 	return &svc, nil
 }
 
-func templateToDaemonSet(name, templatePath string, p templateParam) (*apps.DaemonSet, error) {
+func templateToDaemonSet(name, templateData string, p templateParam) (*apps.DaemonSet, error) {
 	var ds apps.DaemonSet
-	t, err := loadTemplate(name, templatePath, p)
+	t, err := loadTemplate(name, templateData, p)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to load daemonset template")
 	}
 
-	err = yaml.Unmarshal([]byte(t), &ds)
+	err = yaml.Unmarshal(t, &ds)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to unmarshal daemonset template")
 	}
 	return &ds, nil
 }
 
-func templateToDeployment(name, templatePath string, p templateParam) (*apps.Deployment, error) {
-	var ds apps.Deployment
-	t, err := loadTemplate(name, templatePath, p)
+func templateToDeployment(name, templateData string, p templateParam) (*apps.Deployment, error) {
+	var dep apps.Deployment
+	t, err := loadTemplate(name, templateData, p)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to load deployment template")
 	}
 
-	err = yaml.Unmarshal([]byte(t), &ds)
+	err = yaml.Unmarshal(t, &dep)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to unmarshal deployment template")
+		return nil, errors.Wrap(err, "failed to unmarshal deployment template")
 	}
-	return &ds, nil
+	return &dep, nil
 }
 
-func applyResourcesToContainers(clientset kubernetes.Interface, key string, podspec *corev1.PodSpec) {
-	resource := getComputeResource(clientset, key)
+func applyResourcesToContainers(opConfig map[string]string, key string, podspec *corev1.PodSpec) {
+	resource := getComputeResource(opConfig, key)
 	if len(resource) > 0 {
 		for i, c := range podspec.Containers {
 			for _, r := range resource {
@@ -105,19 +96,12 @@ func applyResourcesToContainers(clientset kubernetes.Interface, key string, pods
 	}
 }
 
-func getComputeResource(clientset kubernetes.Interface, key string) []k8sutil.ContainerResource {
+func getComputeResource(opConfig map[string]string, key string) []k8sutil.ContainerResource {
 	// Add Resource list if any
 	resource := []k8sutil.ContainerResource{}
-	resourceRaw := ""
 	var err error
 
-	resourceRaw, err = k8sutil.GetOperatorSetting(clientset, controller.OperatorSettingConfigMapName, key, "")
-
-	if err != nil {
-		logger.Warningf("resource requirement for %q will not be applied. %v", key, err)
-	}
-
-	if resourceRaw != "" {
+	if resourceRaw := k8sutil.GetValue(opConfig, key, ""); resourceRaw != "" {
 		resource, err = k8sutil.YamlToContainerResource(resourceRaw)
 		if err != nil {
 			logger.Warningf("failed to parse %q. %v", resourceRaw, err)
@@ -126,13 +110,9 @@ func getComputeResource(clientset kubernetes.Interface, key string) []k8sutil.Co
 	return resource
 }
 
-func getToleration(clientset kubernetes.Interface, tolerationsName string, defaultTolerations []corev1.Toleration) []corev1.Toleration {
+func getToleration(opConfig map[string]string, tolerationsName string, defaultTolerations []corev1.Toleration) []corev1.Toleration {
 	// Add toleration if any, otherwise return defaultTolerations
-	tolerationsRaw, err := k8sutil.GetOperatorSetting(clientset, controller.OperatorSettingConfigMapName, tolerationsName, "")
-	if err != nil {
-		logger.Warningf("failed to read %q. %v", tolerationsName, err)
-		return defaultTolerations
-	}
+	tolerationsRaw := k8sutil.GetValue(opConfig, tolerationsName, "")
 	if tolerationsRaw == "" {
 		return defaultTolerations
 	}
@@ -153,13 +133,9 @@ func getToleration(clientset kubernetes.Interface, tolerationsName string, defau
 	return tolerations
 }
 
-func getNodeAffinity(clientset kubernetes.Interface, nodeAffinityName string, defaultNodeAffinity *corev1.NodeAffinity) *corev1.NodeAffinity {
+func getNodeAffinity(opConfig map[string]string, nodeAffinityName string, defaultNodeAffinity *corev1.NodeAffinity) *corev1.NodeAffinity {
 	// Add NodeAffinity if any, otherwise return defaultNodeAffinity
-	nodeAffinity, err := k8sutil.GetOperatorSetting(clientset, controller.OperatorSettingConfigMapName, nodeAffinityName, "")
-	if err != nil {
-		logger.Warningf("failed to read %q. %v", nodeAffinityName, err)
-		return defaultNodeAffinity
-	}
+	nodeAffinity := k8sutil.GetValue(opConfig, nodeAffinityName, "")
 	if nodeAffinity == "" {
 		return defaultNodeAffinity
 	}
@@ -178,12 +154,9 @@ func applyToPodSpec(pod *corev1.PodSpec, n *corev1.NodeAffinity, t []corev1.Tole
 	}
 }
 
-func getPortFromConfig(clientset kubernetes.Interface, env string, defaultPort uint16) (uint16, error) {
-	port, err := k8sutil.GetOperatorSetting(clientset, controller.OperatorSettingConfigMapName, env, strconv.Itoa(int(defaultPort)))
-	if err != nil {
-		return defaultPort, errors.Wrapf(err, "failed to load value for %q.", env)
-	}
-	if strings.TrimSpace(port) == "" {
+func getPortFromConfig(data map[string]string, env string, defaultPort uint16) (uint16, error) {
+	port := k8sutil.GetValue(data, env, strconv.Itoa(int(defaultPort)))
+	if strings.TrimSpace(k8sutil.GetValue(data, env, strconv.Itoa(int(defaultPort)))) == "" {
 		return defaultPort, nil
 	}
 	p, err := strconv.ParseUint(port, 10, 64)

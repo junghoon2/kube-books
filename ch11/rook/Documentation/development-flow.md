@@ -10,9 +10,9 @@ don't hesitate to reach out to us on our [Slack](https://Rook-io.slack.com) dev 
 
 ## Prerequisites
 
-1. [GO 1.13](https://golang.org/dl/) or greater installed
+1. [GO 1.17](https://golang.org/dl/) or greater installed
 2. Git client installed
-3. Github account
+3. GitHub account
 
 ## Initial Setup
 
@@ -104,7 +104,6 @@ rook
 │
 ├── cmd                           # Binaries with main entrypoint
 │   ├── rook                      # Main command entry points for operators and daemons
-│   └── rookflex                  # Main command entry points for Rook flexvolume driver
 │
 ├── design                        # Design documents for the various components of the Rook project
 ├── Documentation                 # Rook project Documentation
@@ -114,8 +113,6 @@ rook
 │   ├── apis
 │   │   ├── ceph.rook.io          # ceph specific specs for cluster, file, object
 │   │   │   ├── v1
-│   │   └── rook.io               # rook.io API group of common types
-│   │       └── v1alpha2
 │   ├── client                    # auto-generated strongly typed client code to access Rook APIs
 │   ├── clusterd
 │   ├── daemon                    # daemons for each storage provider
@@ -160,8 +157,8 @@ Authoring a design document for big features has many advantages:
 
 Note that writing code to prototype the feature while working on the design may be very useful to help flesh out the approach.
 
-A design document should be written as a markdown file in the [design folder](/design).
-You can follow the process outlined in the [design template](/design/design_template.md).
+A design document should be written as a markdown file in the [design folder](https://github.com/rook/rook/tree/master/design).
+You can follow the process outlined in the [design template](https://github.com/rook/rook/tree/master/design/design_template.md).
 You will see many examples of previous design documents in that folder.
 Submit a pull request for the design to be discussed and approved by the community before being merged into master, just like any other change to the repository.
 
@@ -279,7 +276,7 @@ If a feature it is a full description of the new functionality.
 * refer to the issue it's closing, this is mandatory when fixing a bug
 * have a sign-off, this is achieved by adding `-s` when committing so in practice run `git commit -s`. If not the DCO bot will complain.
 If you forgot to add the sign-off you can also amend a previous commit with the sign-off by running `git commit --amend -s`.
-If you've pushed your changes to Github already you'll need to force push your branch with `git push -f`.
+If you've pushed your changes to GitHub already you'll need to force push your branch with `git push -f`.
 
 Here is an example of an acceptable commit message:
 
@@ -293,24 +290,7 @@ Closes: https://github.com/rook/rook/issues/<NUMBER>
 Signed-off-by: First Name Last Name <email address>
 ```
 
-The `component` **MUST** be one of the following:
-- bot
-- build
-- ceph
-- cephfs-mirror
-- ci
-- core
-- csi
-- docs
-- mds
-- mgr
-- mon
-- monitoring
-- osd
-- pool
-- rbd-mirror
-- rgw
-- test
+The `component` **MUST** be in the [list checked by the CI](https://github.com/rook/rook/blob/master/.commitlintrc.json).
 
 Note: sometimes you will feel like there is not so much to say, for instance if you are fixing a typo in a text.
 In that case, it is acceptable to shorten the commit message.

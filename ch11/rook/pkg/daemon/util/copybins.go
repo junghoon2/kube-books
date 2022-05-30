@@ -26,17 +26,13 @@ import (
 
 // override these for unit testing
 var defaultRookDir = "/usr/local/bin"
-var defaultTiniDir = "/"
 
-// CopyBinaries copies the "tini" and "rook" binaries to a shared volume at the target path.
+// CopyBinaries copies the "rook" binary to a shared volume at the target path.
 func CopyBinaries(target string) error {
-	if err := copyBinary(defaultRookDir, target, "rook"); err != nil {
-		return err
-	}
-	return copyBinary(defaultTiniDir, target, "tini")
+	return copyBinary(defaultRookDir, target, "rook")
 }
 
-// #nosec G307 Calling defer to close the file without checking the error return is not a risk for a simple file open and close
+//nolint:gosec // Calling defer to close the file without checking the error return is not a risk for a simple file open and close
 func copyBinary(sourceDir, targetDir, filename string) error {
 	sourcePath := path.Join(sourceDir, filename)
 	targetPath := path.Join(targetDir, filename)
@@ -71,6 +67,6 @@ func copyBinary(sourceDir, targetDir, filename string) error {
 	if err := destinationFile.Close(); err != nil {
 		return err
 	}
-	// #nosec targetPath requires the permission to execute
+	//nolint:gosec // targetPath requires the permission to execute
 	return os.Chmod(targetPath, 0700)
 }

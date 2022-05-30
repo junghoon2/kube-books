@@ -2,9 +2,10 @@
 
 ## Overview
 
-An object store bucket is a container holding immutable objects. The Rook-Ceph [operator](https://github.com/yard-turkey/rook/blob/master/cluster/examples/kubernetes/ceph/operator.yaml) creates a controller which automates the provisioning of new and existing buckets.
+An object store bucket is a container holding immutable objects. The Rook-Ceph [operator](https://github.com/rook/rook/blob/master/deploy/examples/operator.yaml) creates a controller which automates the provisioning of new and existing buckets.
 
 A user requests bucket storage by creating an _ObjectBucketClaim_ (OBC). Upon detecting a new OBC, the Rook-Ceph bucket provisioner does the following:
+
 - creates a new bucket and grants user-level access (greenfield), or
 - grants user-level access to an existing bucket (brownfield), and
 - creates a Kubernetes Secret in the same namespace as the OBC
@@ -20,14 +21,14 @@ We welcome contributions! In the meantime, features that are not yet implemented
 
 - A Rook storage cluster must be configured and running in Kubernetes. In this example, it is assumed the cluster is in the `rook` namespace.
 - The following resources, or equivalent, need to be created:
-  - [crd](/cluster/examples/kubernetes/ceph/crds.yaml)
-  - [common](/cluster/examples/kubernetes/ceph/common.yaml)
-  - [operator](/cluster/examples/kubernetes/ceph/operator.yaml)
-  - [cluster](/cluster/examples/kubernetes/ceph/cluster-test.yaml)
-  - [object](/cluster/examples/kubernetes/ceph/object-test.yaml)
-  - [user](/cluster/examples/kubernetes/ceph/object-user.yaml)
-  - [storageclass](/cluster/examples/kubernetes/ceph/storageclass-bucket-retain.yaml)
-  - [claim](/cluster/examples/kubernetes/ceph/object-bucket-claim-retain.yaml)
+  - [crd](/deploy/examples/crds.yaml)
+  - [common](/deploy/examples/common.yaml)
+  - [operator](/deploy/examples/operator.yaml)
+  - [cluster](/deploy/examples/cluster-test.yaml)
+  - [object](/deploy/examples/object-test.yaml)
+  - [user](/deploy/examples/object-user.yaml)
+  - [storageclass](/deploy/examples/storageclass-bucket-retain.yaml)
+  - [claim](/deploy/examples/object-bucket-claim-retain.yaml)
 
 
 ## Object Store Bucket Walkthrough
@@ -97,12 +98,24 @@ The pools are the backing data store for the object store and are created with s
 
 The gateway settings correspond to the RGW service.
 - `type`: Can be `s3`. In the future support for `swift` can be added.
-- `sslCertificateRef`: If specified, this is the name of the Kubernetes secret that contains the SSL certificate to be used for secure connections to the object store. The secret must be in the same namespace as the Rook cluster. Rook will look in the secret provided at the `cert` key name. The value of the `cert` key must be in the format expected by the [RGW service](https://docs.ceph.com/docs/master/install/ceph-deploy/install-ceph-gateway/#using-ssl-with-civetweb): "The server key, server certificate, and any other CA or intermediate certificates be supplied in one file. Each of these items must be in pem form." If the certificate is not specified, SSL will not be configured.
+- `sslCertificateRef`: If specified, this is the name of the Kubernetes secret that contains the SSL
+  certificate to be used for secure connections to the object store. The secret must be in the same
+  namespace as the Rook cluster. If it is an opaque Kubernetes Secret, Rook will look in the secret provided at the `cert` key name. The
+  value of the `cert` key must be in the format expected by the [RGW
+  service](https://docs.ceph.com/docs/master/install/ceph-deploy/install-ceph-gateway/#using-ssl-with-civetweb):
+  "The server key, server certificate, and any other CA or intermediate certificates be supplied in
+  one file. Each of these items must be in pem form." If the certificate is not specified, SSL will
+  not be configured. They are scenarios where the certificate DNS is set for a particular domain
+  that does not include the local Kubernetes DNS, namely the object store DNS service endpoint. If
+  adding the service DNS name to the certificate is not empty another key can be specified in the
+  secret's data: `insecureSkipVerify: true` to skip the certificate verification. It is not
+  recommended to enable this option since TLS is susceptible to machine-in-the-middle attacks unless
+  custom verification is used.
 - `port`: The service port where the RGW service will be listening (http)
 - `securePort`: The service port where the RGW service will be listening (https)
 - `instances`: The number of RGW pods that will be started for this object store (ignored if allNodes=true)
 - `allNodes`: Whether all nodes in the cluster should run RGW as a daemonset
-- `placement`: The rgw pods can be given standard Kubernetes placement restrictions with `nodeAffinity`, `tolerations`, `podAffinity`, and `podAntiAffinity` similar to placement defined for daemons configured by the [cluster CRD](/cluster/examples/kubernetes/ceph/cluster.yaml).
+- `placement`: The rgw pods can be given standard Kubernetes placement restrictions with `nodeAffinity`, `tolerations`, `podAffinity`, and `podAntiAffinity` similar to placement defined for daemons configured by the [cluster CRD](/deploy/examples/cluster.yaml).
 
 The RGW service can be configured to listen on both http and https by specifying both `port` and `securePort`.
 

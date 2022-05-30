@@ -17,8 +17,6 @@ limitations under the License.
 package nfs
 
 import (
-	"context"
-
 	"github.com/pkg/errors"
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	cephclient "github.com/rook/rook/pkg/daemon/ceph/client"
@@ -71,7 +69,6 @@ func (r *ReconcileCephNFS) generateCephNFSService(nfs *cephv1.CephNFS, cfg daemo
 }
 
 func (r *ReconcileCephNFS) createCephNFSService(nfs *cephv1.CephNFS, cfg daemonConfig) error {
-	ctx := context.TODO()
 	s := r.generateCephNFSService(nfs, cfg)
 
 	// Set owner ref to the parent object
@@ -80,7 +77,7 @@ func (r *ReconcileCephNFS) createCephNFSService(nfs *cephv1.CephNFS, cfg daemonC
 		return errors.Wrapf(err, "failed to set owner reference to ceph nfs %q", s)
 	}
 
-	svc, err := r.context.Clientset.CoreV1().Services(nfs.Namespace).Create(ctx, s, metav1.CreateOptions{})
+	svc, err := r.context.Clientset.CoreV1().Services(nfs.Namespace).Create(r.opManagerContext, s, metav1.CreateOptions{})
 	if err != nil {
 		if !kerrors.IsAlreadyExists(err) {
 			return errors.Wrap(err, "failed to create ganesha service")
@@ -144,6 +141,12 @@ func (r *ReconcileCephNFS) makeDeployment(nfs *cephv1.CephNFS, cfg daemonConfig)
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   resourceName,
 			Labels: getLabels(nfs, cfg.ID, true),
+			Annotations: map[string]string{
+				// set an annotation with the hash of the configmap data so that the pod will be
+				// re-deployed if the config in the configmap changes. otherwise, the pod won't
+				// restart when the config is updated.
+				"config-hash": cfg.ConfigConfigMapHash,
+			},
 		},
 		Spec: podSpec,
 	}
@@ -245,8 +248,8 @@ func (r *ReconcileCephNFS) dbusContainer(nfs *cephv1.CephNFS) v1.Container {
 }
 
 func getLabels(n *cephv1.CephNFS, name string, includeNewLabels bool) map[string]string {
-	labels := controller.CephDaemonAppLabels(AppName, n.Namespace, "nfs", name, includeNewLabels)
-	labels["ceph_nfs"] = n.Name
+	labels := controller.CephDaemonAppLabels(AppName, n.Namespace, "nfs", n.Name+"-"+name, n.Name, "cephnfses.ceph.rook.io", includeNewLabels)
+	labels[CephNFSNameLabelKey] = n.Name
 	labels["instance"] = name
 	return labels
 }

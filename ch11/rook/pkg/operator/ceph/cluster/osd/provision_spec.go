@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"path"
 
-	"github.com/libopenstorage/secrets"
 	"github.com/pkg/errors"
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	kms "github.com/rook/rook/pkg/daemon/ceph/osd/kms"
@@ -55,7 +54,7 @@ func (c *Cluster) makeJob(osdProps osdProperties, provisionConfig *provisionConf
 
 	job := &batch.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      k8sutil.TruncateNodeName(prepareAppNameFmt, osdProps.crushHostname),
+			Name:      k8sutil.TruncateNodeNameForJob(prepareAppNameFmt, osdProps.crushHostname),
 			Namespace: c.clusterInfo.Namespace,
 			Labels: map[string]string{
 				k8sutil.AppAttr:     prepareAppName,
@@ -121,9 +120,8 @@ func (c *Cluster) provisionPodTemplateSpec(osdProps osdProperties, restart v1.Re
 		if osdProps.encrypted {
 			// If a KMS is configured we populate
 			if c.spec.Security.KeyManagementService.IsEnabled() {
-				kmsProvider := kms.GetParam(c.spec.Security.KeyManagementService.ConnectionDetails, kms.Provider)
-				if kmsProvider == secrets.TypeVault {
-					volumeTLS, _ := kms.VaultVolumeAndMount(c.spec.Security.KeyManagementService.ConnectionDetails)
+				if c.spec.Security.KeyManagementService.IsVaultKMS() {
+					volumeTLS, _ := kms.VaultVolumeAndMount(c.spec.Security.KeyManagementService.ConnectionDetails, "")
 					volumes = append(volumes, volumeTLS)
 				}
 			}
@@ -278,14 +276,13 @@ func (c *Cluster) provisionOSDContainer(osdProps osdProperties, copyBinariesMoun
 		envVars = append(envVars, pvcNameEnvVar(osdProps.pvc.ClaimName))
 
 		if osdProps.encrypted {
-			// If a KMS is configured we populate
+			// If a KMS is configured we populate volume mounts and env variables
 			if c.spec.Security.KeyManagementService.IsEnabled() {
-				kmsProvider := kms.GetParam(c.spec.Security.KeyManagementService.ConnectionDetails, kms.Provider)
-				if kmsProvider == secrets.TypeVault {
-					_, volumeMountsTLS := kms.VaultVolumeAndMount(c.spec.Security.KeyManagementService.ConnectionDetails)
+				if c.spec.Security.KeyManagementService.IsVaultKMS() {
+					_, volumeMountsTLS := kms.VaultVolumeAndMount(c.spec.Security.KeyManagementService.ConnectionDetails, "")
 					volumeMounts = append(volumeMounts, volumeMountsTLS)
-					envVars = append(envVars, kms.VaultConfigToEnvVar(c.spec)...)
 				}
+				envVars = append(envVars, kms.ConfigToEnvVar(c.spec)...)
 			} else {
 				envVars = append(envVars, cephVolumeRawEncryptedEnvVarFromSecret(osdProps))
 			}
@@ -299,12 +296,13 @@ func (c *Cluster) provisionOSDContainer(osdProps osdProperties, copyBinariesMoun
 	readOnlyRootFilesystem := false
 
 	osdProvisionContainer := v1.Container{
-		Command:      []string{path.Join(rookBinariesMountPath, "tini")},
-		Args:         []string{"--", path.Join(rookBinariesMountPath, "rook"), "ceph", "osd", "provision"},
+		Command:      []string{path.Join(rookBinariesMountPath, "rook")},
+		Args:         []string{"ceph", "osd", "provision"},
 		Name:         "provision",
 		Image:        c.spec.CephVersion.Image,
 		VolumeMounts: volumeMounts,
 		Env:          envVars,
+		EnvFrom:      getEnvFromSources(),
 		SecurityContext: &v1.SecurityContext{
 			Privileged:             &privileged,
 			RunAsUser:              &runAsUser,

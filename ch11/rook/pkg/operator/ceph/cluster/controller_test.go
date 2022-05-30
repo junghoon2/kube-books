@@ -18,31 +18,29 @@ package cluster
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
-	rookalpha "github.com/rook/rook/pkg/apis/rook.io/v1alpha2"
+	"github.com/rook/rook/pkg/client/clientset/versioned/scheme"
 	"github.com/rook/rook/pkg/clusterd"
-	"github.com/rook/rook/pkg/daemon/ceph/agent/flexvolume/attachment"
-	"github.com/rook/rook/pkg/operator/k8sutil"
-	testop "github.com/rook/rook/pkg/operator/test"
 	"github.com/stretchr/testify/assert"
-	"github.com/tevino/abool"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-func TestReconcile_DeleteCephCluster(t *testing.T) {
+func TestReconcileDeleteCephCluster(t *testing.T) {
 	ctx := context.TODO()
 	cephNs := "rook-ceph"
 	clusterName := "my-cluster"
@@ -78,46 +76,26 @@ func TestReconcile_DeleteCephCluster(t *testing.T) {
 		// set up clusterd.Context
 		clusterdCtx := &clusterd.Context{
 			Clientset: k8sfake.NewSimpleClientset(),
-			// reconcile looks for fake dependencies in the dynamic clientset
-			DynamicClientset:           dynamicfake.NewSimpleDynamicClient(scheme, fakePool),
-			RequestCancelOrchestration: abool.New(),
-		}
-
-		// set up ClusterController
-		volumeAttachmentController := &attachment.MockAttachment{
-			MockList: func(namespace string) (*rookalpha.VolumeList, error) {
-				t.Log("test vol attach list")
-				return &rookalpha.VolumeList{Items: []rookalpha.Volume{}}, nil
-			},
-		}
-		operatorConfigCallbacks := []func() error{
-			func() error {
-				t.Log("test op config callback")
-				return nil
-			},
-		}
-		addCallbacks := []func() error{
-			func() error {
-				t.Log("test success callback")
-				return nil
-			},
 		}
 
 		// create the cluster controller and tell it that the cluster has been deleted
-		controller := NewClusterController(clusterdCtx, "", volumeAttachmentController, operatorConfigCallbacks, addCallbacks)
+		controller := NewClusterController(clusterdCtx, "")
 		fakeRecorder := record.NewFakeRecorder(5)
-		controller.recorder = k8sutil.NewEventReporter(fakeRecorder)
+		controller.recorder = fakeRecorder
 
 		// Create a fake client to mock API calls
 		// Make sure it has the fake CephCluster that is to be deleted in it
-		client := clientfake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(fakeCluster).Build()
+		client := clientfake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(fakeCluster, fakePool).Build()
 
+		err := corev1.AddToScheme(scheme)
+		assert.NoError(t, err)
 		// Create a ReconcileCephClient object with the scheme and fake client.
 		reconcileCephCluster := &ReconcileCephCluster{
 			client:            client,
 			scheme:            scheme,
 			context:           clusterdCtx,
 			clusterController: controller,
+			opManagerContext:  context.TODO(),
 		}
 
 		req := reconcile.Request{NamespacedName: nsName}
@@ -126,7 +104,7 @@ func TestReconcile_DeleteCephCluster(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotZero(t, resp.RequeueAfter)
 		event := <-fakeRecorder.Events
-		assert.Contains(t, event, "CephBlockPools")
+		assert.Contains(t, event, "CephBlockPool")
 		assert.Contains(t, event, "my-block-pool")
 
 		blockedCluster := &cephv1.CephCluster{}
@@ -139,8 +117,7 @@ func TestReconcile_DeleteCephCluster(t *testing.T) {
 		assert.Equal(t, corev1.ConditionTrue, cephv1.FindStatusCondition(status.Conditions, cephv1.ConditionDeletionIsBlocked).Status)
 
 		// delete blocking dependency
-		gvr := cephv1.SchemeGroupVersion.WithResource("cephblockpools")
-		err = clusterdCtx.DynamicClientset.Resource(gvr).Namespace(cephNs).Delete(ctx, "my-block-pool", metav1.DeleteOptions{})
+		err = client.Delete(ctx, fakePool)
 		assert.NoError(t, err)
 
 		resp, err = reconcileCephCluster.Reconcile(ctx, req)
@@ -156,115 +133,63 @@ func TestReconcile_DeleteCephCluster(t *testing.T) {
 	})
 }
 
-func Test_checkIfVolumesExist(t *testing.T) {
-	t.Run("flexvolume enabled", func(t *testing.T) {
-		nodeName := "node841"
-		clusterName := "cluster684"
-		pvName := "pvc-540"
-		rookSystemNamespace := "rook-system-6413"
-
-		os.Setenv("ROOK_ENABLE_FLEX_DRIVER", "true")
-		os.Setenv(k8sutil.PodNamespaceEnvVar, rookSystemNamespace)
-		defer os.Unsetenv("ROOK_ENABLE_FLEX_DRIVER")
-		defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
-
-		context := &clusterd.Context{
-			Clientset: testop.New(t, 3),
-		}
-		listCount := 0
-		volumeAttachmentController := &attachment.MockAttachment{
-			MockList: func(namespace string) (*rookalpha.VolumeList, error) {
-				listCount++
-				if listCount == 1 {
-					// first listing returns an existing volume attachment, so the controller should wait
-					return &rookalpha.VolumeList{
-						Items: []rookalpha.Volume{
-							{
-								ObjectMeta: metav1.ObjectMeta{
-									Name:      pvName,
-									Namespace: rookSystemNamespace,
-								},
-								Attachments: []rookalpha.Attachment{
-									{
-										Node:        nodeName,
-										ClusterName: clusterName,
-									},
-								},
-							},
-						},
-					}, nil
-				}
-
-				// subsequent listings should return no volume attachments, meaning that they have all
-				// been cleaned up and the controller can move on.
-				return &rookalpha.VolumeList{Items: []rookalpha.Volume{}}, nil
-
+func TestRemoveFinalizers(t *testing.T) {
+	reconcileCephCluster := &ReconcileCephCluster{
+		opManagerContext: context.TODO(),
+	}
+	s := scheme.Scheme
+	fakeObject1 := &cephv1.CephCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "rook-ceph",
+			Finalizers: []string{
+				"cephcluster.ceph.rook.io",
 			},
-		}
-		operatorConfigCallbacks := []func() error{
-			func() error {
-				logger.Infof("test success callback")
-				return nil
+		},
+		TypeMeta: metav1.TypeMeta{
+			Kind: "CephCluster",
+		},
+	}
+	schema1 := schema.GroupVersion{Group: "ceph.rook.io", Version: "v1"}
+	fakeObject2 := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test",
+			Namespace: "rook-ceph",
+			Finalizers: []string{
+				"ceph.rook.io/disaster-protection",
 			},
-		}
-		addCallbacks := []func() error{
-			func() error {
-				logger.Infof("test success callback")
-				return nil
-			},
-		}
-		// create the cluster controller and tell it that the cluster has been deleted
-		controller := NewClusterController(context, "", volumeAttachmentController, operatorConfigCallbacks, addCallbacks)
-		clusterToDelete := &cephv1.CephCluster{ObjectMeta: metav1.ObjectMeta{Namespace: clusterName}}
+		},
+		TypeMeta: metav1.TypeMeta{
+			Kind: "Secret",
+		},
+	}
+	schema2 := schema.GroupVersion{Group: "", Version: "v1"}
 
-		// The test returns a volume on the first call
-		assert.Error(t, controller.checkIfVolumesExist(clusterToDelete))
+	tests := []struct {
+		name      string
+		finalizer string
+		object    client.Object
+		schema    schema.GroupVersion
+	}{
+		{"CephCluster", "cephcluster.ceph.rook.io", fakeObject1, schema1},
+		{"mon secret", "ceph.rook.io/disaster-protection", fakeObject2, schema2},
+	}
 
-		// The test does not return volumes on the second call
-		assert.NoError(t, controller.checkIfVolumesExist(clusterToDelete))
-	})
+	for _, tt := range tests {
+		t.Run("delete finalizer for "+tt.name, func(t *testing.T) {
+			fakeObject, err := meta.Accessor(tt.object)
+			assert.NoError(t, err)
+			object := []runtime.Object{
+				tt.object,
+			}
+			s.AddKnownTypes(tt.schema, tt.object)
+			cl := fake.NewClientBuilder().WithScheme(s).WithRuntimeObjects(object...).Build()
 
-	t.Run("flexvolume disabled (CSI)", func(t *testing.T) {
-		clusterName := "cluster684"
-		rookSystemNamespace := "rook-system-6413"
-
-		os.Setenv("ROOK_ENABLE_FLEX_DRIVER", "false")
-		os.Setenv(k8sutil.PodNamespaceEnvVar, rookSystemNamespace)
-		defer os.Unsetenv("ROOK_ENABLE_FLEX_DRIVER")
-		defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
-
-		context := &clusterd.Context{
-			Clientset: testop.New(t, 3),
-		}
-		listCount := 0
-		volumeAttachmentController := &attachment.MockAttachment{
-			MockList: func(namespace string) (*rookalpha.VolumeList, error) {
-				listCount++
-				return &rookalpha.VolumeList{Items: []rookalpha.Volume{}}, nil
-
-			},
-		}
-		operatorConfigCallbacks := []func() error{
-			func() error {
-				logger.Infof("test success callback")
-				return nil
-			},
-		}
-		addCallbacks := []func() error{
-			func() error {
-				logger.Infof("test success callback")
-				os.Setenv("ROOK_ENABLE_FLEX_DRIVER", "true")
-				os.Setenv(k8sutil.PodNamespaceEnvVar, rookSystemNamespace)
-				defer os.Unsetenv("ROOK_ENABLE_FLEX_DRIVER")
-				return nil
-			},
-		}
-		// create the cluster controller and tell it that the cluster has been deleted
-		controller := NewClusterController(context, "", volumeAttachmentController, operatorConfigCallbacks, addCallbacks)
-		clusterToDelete := &cephv1.CephCluster{ObjectMeta: metav1.ObjectMeta{Namespace: clusterName}}
-		assert.NoError(t, controller.checkIfVolumesExist(clusterToDelete))
-
-		// Ensure that the listing of volume attachments was never called.
-		assert.Equal(t, 0, listCount)
-	})
+			assert.NotEmpty(t, fakeObject.GetFinalizers())
+			name := types.NamespacedName{Name: fakeObject.GetName(), Namespace: fakeObject.GetNamespace()}
+			err = reconcileCephCluster.removeFinalizer(cl, name, tt.object, tt.finalizer)
+			assert.NoError(t, err)
+			assert.Empty(t, fakeObject.GetFinalizers())
+		})
+	}
 }

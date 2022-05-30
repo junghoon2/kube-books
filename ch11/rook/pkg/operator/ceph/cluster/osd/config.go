@@ -25,21 +25,11 @@ import (
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	"github.com/rook/rook/pkg/operator/ceph/cluster/mgr"
 	opconfig "github.com/rook/rook/pkg/operator/ceph/config"
-	v1 "k8s.io/api/core/v1"
 )
 
 const (
 	dmCryptKeySize = 128
 )
-
-// PrivilegedContext returns a privileged Pod security context
-func PrivilegedContext() *v1.SecurityContext {
-	privileged := true
-
-	return &v1.SecurityContext{
-		Privileged: &privileged,
-	}
-}
 
 func osdOnSDNFlag(network cephv1.NetworkSpec) []string {
 	var args []string
@@ -75,15 +65,4 @@ func generateDmCryptKey() (string, error) {
 	}
 
 	return base64.StdEncoding.EncodeToString(key), nil
-}
-
-func (c *Cluster) isCephVolumeRawModeSupported() bool {
-	if c.clusterInfo.CephVersion.IsAtLeast(cephVolumeRawEncryptionModeMinNautilusCephVersion) && !c.clusterInfo.CephVersion.IsOctopus() {
-		return true
-	}
-	if c.clusterInfo.CephVersion.IsAtLeast(cephVolumeRawEncryptionModeMinOctopusCephVersion) {
-		return true
-	}
-
-	return false
 }

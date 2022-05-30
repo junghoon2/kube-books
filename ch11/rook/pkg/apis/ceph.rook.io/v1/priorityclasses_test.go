@@ -20,8 +20,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/ghodss/yaml"
 	"github.com/stretchr/testify/assert"
+	"k8s.io/apimachinery/pkg/util/yaml"
 )
 
 func TestPriorityClassNamesSpec(t *testing.T) {
@@ -30,10 +30,11 @@ all: all-class
 mgr: mgr-class
 mon: mon-class
 osd: osd-class
+crashcollector: crashcollector-class
 `)
 
 	// convert the raw spec yaml into JSON
-	rawJSON, err := yaml.YAMLToJSON(specYaml)
+	rawJSON, err := yaml.ToJSON(specYaml)
 	assert.Nil(t, err)
 
 	// unmarshal the JSON into a strongly typed annotations spec object
@@ -43,10 +44,11 @@ osd: osd-class
 
 	// the unmarshalled priority class names spec should equal the expected spec below
 	expected := PriorityClassNamesSpec{
-		"all": "all-class",
-		"mgr": "mgr-class",
-		"mon": "mon-class",
-		"osd": "osd-class",
+		"all":            "all-class",
+		"mgr":            "mgr-class",
+		"mon":            "mon-class",
+		"osd":            "osd-class",
+		"crashcollector": "crashcollector-class",
 	}
 	assert.Equal(t, expected, priorityClassNames)
 }

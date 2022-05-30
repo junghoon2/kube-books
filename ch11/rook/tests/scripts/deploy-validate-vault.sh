@@ -1,7 +1,23 @@
-#!/bin/bash
-set -ex
+#!/usr/bin/env bash
+
+# Copyright 2021 The Rook Authors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -exEuo pipefail
 
 : "${ACTION:=${1}}"
+: "${KUBERNETES_AUTH:=false}"
 
 #############
 # VARIABLES #
@@ -9,6 +25,10 @@ set -ex
 SERVICE=vault
 NAMESPACE=default
 ROOK_NAMESPACE=rook-ceph
+ROOK_VAULT_SA=rook-vault-auth
+ROOK_SYSTEM_SA=rook-ceph-system
+ROOK_OSD_SA=rook-ceph-osd
+VAULT_POLICY_NAME=rook
 SECRET_NAME=vault-server-tls
 TMPDIR=$(mktemp -d)
 VAULT_SERVER=https://vault.default:8200
@@ -30,59 +50,13 @@ if [[ "$(uname)" == "Linux" ]]; then
   install_helm
 fi
 
-function generate_vault_tls_config {
-  openssl genrsa -out "${TMPDIR}"/vault.key 2048
-  
-  cat <<EOF >"${TMPDIR}"/csr.conf
-[req]
-req_extensions = v3_req
-distinguished_name = req_distinguished_name
-[req_distinguished_name]
-[ v3_req ]
-basicConstraints = CA:FALSE
-keyUsage = nonRepudiation, digitalSignature, keyEncipherment
-extendedKeyUsage = serverAuth
-subjectAltName = @alt_names
-[alt_names]
-DNS.1 = ${SERVICE}
-DNS.2 = ${SERVICE}.${NAMESPACE}
-DNS.3 = ${SERVICE}.${NAMESPACE}.svc
-DNS.4 = ${SERVICE}.${NAMESPACE}.svc.cluster.local
-IP.1 = 127.0.0.1
-EOF
-  
-  openssl req -new -key "${TMPDIR}"/vault.key -subj "/CN=${SERVICE}.${NAMESPACE}.svc" -out "${TMPDIR}"/server.csr -config "${TMPDIR}"/csr.conf
-  
-  export CSR_NAME=vault-csr
-  
-  cat <<EOF >"${TMPDIR}"/csr.yaml
-apiVersion: certificates.k8s.io/v1beta1
-kind: CertificateSigningRequest
-metadata:
-  name: ${CSR_NAME}
-spec:
-  groups:
-  - system:authenticated
-  request: $(cat ${TMPDIR}/server.csr | base64 | tr -d '\n')
-  usages:
-  - digital signature
-  - key encipherment
-  - server auth
-EOF
-  
-  kubectl create -f "${TMPDIR}/"csr.yaml
-  
-  kubectl certificate approve ${CSR_NAME}
-  
-  serverCert=$(kubectl get csr ${CSR_NAME} -o jsonpath='{.status.certificate}')
-  echo "${serverCert}" | openssl base64 -d -A -out "${TMPDIR}"/vault.crt
-  kubectl config view --raw --minify --flatten -o jsonpath='{.clusters[].cluster.certificate-authority-data}' | base64 -d > "${TMPDIR}"/vault.ca
+function create_secret_generic {
   kubectl create secret generic ${SECRET_NAME} \
   --namespace ${NAMESPACE} \
   --from-file=vault.key="${TMPDIR}"/vault.key \
   --from-file=vault.crt="${TMPDIR}"/vault.crt \
   --from-file=vault.ca="${TMPDIR}"/vault.ca
-  
+
   # for rook
   kubectl create secret generic vault-ca-cert --namespace ${ROOK_NAMESPACE} --from-file=cert="${TMPDIR}"/vault.ca
   kubectl create secret generic vault-client-cert --namespace ${ROOK_NAMESPACE} --from-file=cert="${TMPDIR}"/vault.crt
@@ -90,7 +64,7 @@ EOF
 }
 
 function vault_helm_tls {
-  
+
 cat <<EOF >"${TMPDIR}/"custom-values.yaml
 global:
   enabled: true
@@ -119,19 +93,21 @@ server:
         path = "/vault/data"
       }
 EOF
-  
+
 }
 
 function deploy_vault {
   # TLS config
-  generate_vault_tls_config
+  scriptdir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+  bash "${scriptdir}"/generate-tls-config.sh "${TMPDIR}" ${SERVICE} ${NAMESPACE}
+  create_secret_generic
   vault_helm_tls
-  
+
   # Install Vault with Helm
   helm repo add hashicorp https://helm.releases.hashicorp.com
   helm install vault hashicorp/vault --values "${TMPDIR}/"custom-values.yaml
   timeout 120 sh -c 'until kubectl get pods -l app.kubernetes.io/name=vault --field-selector=status.phase=Running|grep vault-0; do sleep 5; done'
-  
+
   # Unseal Vault
   VAULT_INIT_TEMP_DIR=$(mktemp)
   kubectl exec -ti vault-0 -- vault operator init -format "json" -ca-cert /vault/userconfig/vault-server-tls/vault.crt | tee -a "$VAULT_INIT_TEMP_DIR"
@@ -139,19 +115,20 @@ function deploy_vault {
     kubectl exec -ti vault-0 -- vault operator unseal -ca-cert /vault/userconfig/vault-server-tls/vault.crt "$(jq -r ".unseal_keys_b64[$i]" "$VAULT_INIT_TEMP_DIR")"
   done
   kubectl get pods -l app.kubernetes.io/name=vault
-  
+
   # Wait for vault to be ready once unsealed
   while [[ $(kubectl get pods -l app.kubernetes.io/name=vault -o 'jsonpath={..status.conditions[?(@.type=="Ready")].status}') != "True" ]]; do echo "waiting vault to be ready" && sleep 1; done
-  
+
   # Configure Vault
   ROOT_TOKEN=$(jq -r '.root_token' "$VAULT_INIT_TEMP_DIR")
   kubectl exec -it vault-0 -- vault login -ca-cert /vault/userconfig/vault-server-tls/vault.crt "$ROOT_TOKEN"
-  #enable kv engine v1 for osd and v2 for rgw encryption respectively in different path
+  #enable kv engine v1 for osd and v2,transit for rgw encryption respectively in different path
   kubectl exec -ti vault-0 -- vault secrets enable -ca-cert /vault/userconfig/vault-server-tls/vault.crt -path=rook/ver1 kv
   kubectl exec -ti vault-0 -- vault secrets enable -ca-cert /vault/userconfig/vault-server-tls/vault.crt -path=rook/ver2 kv-v2
+  kubectl exec -ti vault-0 -- vault secrets enable -ca-cert /vault/userconfig/vault-server-tls/vault.crt transit
   kubectl exec -ti vault-0 -- vault kv list -ca-cert /vault/userconfig/vault-server-tls/vault.crt rook/ver1 || true # failure is expected
   kubectl exec -ti vault-0 -- vault kv list -ca-cert /vault/userconfig/vault-server-tls/vault.crt rook/ver2 || true # failure is expected
-  
+
   # Configure Vault Policy for Rook
   echo '
   path "rook/*" {
@@ -159,30 +136,104 @@ function deploy_vault {
   }
   path "sys/mounts" {
   capabilities = ["read"]
-  }'| kubectl exec -i vault-0 -- vault policy write -ca-cert /vault/userconfig/vault-server-tls/vault.crt rook -
-  
-  # Create a token for Rook
-  ROOK_TOKEN=$(kubectl exec vault-0 -- vault token create -policy=rook -format json -ca-cert /vault/userconfig/vault-server-tls/vault.crt|jq -r '.auth.client_token'|base64)
-  
-  # Configure cluster
-  sed -i "s|ROOK_TOKEN|${ROOK_TOKEN//[$'\t\r\n']}|" tests/manifests/test-kms-vault.yaml
+  }
+  path "transit/keys/*" {
+    capabilities = [ "create", "update" ]
+    denied_parameters = {"exportable" = [], "allow_plaintext_backup" = [] }
+  }
+  path "transit/keys/*" {
+    capabilities = ["read", "delete"]
+  }
+  path "transit/keys/" {
+    capabilities = ["list"]
+  }
+  path "transit/keys/+/rotate" {
+    capabilities = [ "update" ]
+  }
+  path "transit/*" {
+    capabilities = [ "update" ]
+  }'| kubectl exec -i vault-0 -- vault policy write -ca-cert /vault/userconfig/vault-server-tls/vault.crt "$VAULT_POLICY_NAME" -
+
+  # Configure Kubernetes auth
+  if [[ "${KUBERNETES_AUTH}" == "true" ]]; then
+    set_up_vault_kubernetes_auth
+  else
+    # Create a token for Rook
+    ROOK_TOKEN=$(kubectl exec vault-0 -- vault token create -policy=rook -format json -ca-cert /vault/userconfig/vault-server-tls/vault.crt|jq -r '.auth.client_token'|base64)
+
+    # Configure cluster
+    sed -i "s|ROOK_TOKEN|${ROOK_TOKEN//[$'\t\r\n']}|" tests/manifests/test-kms-vault.yaml
+  fi
 }
 
 function validate_rgw_token {
-  # Create secret for RGW server in kv engine
-  ENCRYPTION_KEY=$(openssl rand -base64 32)
-  kubectl exec vault-0 -- vault kv put -ca-cert /vault/userconfig/vault-server-tls/vault.crt rook/ver2/"$RGW_BUCKET_KEY" key="$ENCRYPTION_KEY"
   RGW_POD=$(kubectl -n rook-ceph get pods -l app=rook-ceph-rgw | awk 'FNR == 2 {print $1}')
-  RGW_TOKEN_FILE=$(kubectl -n rook-ceph describe pods "$RGW_POD" | grep  "rgw-crypt-vault-token-file" | cut -f2- -d=)
-  VAULT_PATH_PREFIX=$(kubectl -n rook-ceph describe pods "$RGW_POD" | grep  "rgw-crypt-vault-prefix" | cut -f2- -d=)
+  RGW_TOKEN_FILE=$(kubectl -n rook-ceph describe pods "$RGW_POD" | grep "rgw-crypt-vault-token-file" | cut -f2- -d=)
+  VAULT_PATH_PREFIX=$(kubectl -n rook-ceph describe pods "$RGW_POD" | grep "rgw-crypt-vault-prefix" | cut -f2- -d=)
   VAULT_TOKEN=$(kubectl -n rook-ceph exec $RGW_POD -- cat $RGW_TOKEN_FILE)
-  
-  #fetch key from vault server using token from RGW pod, P.S using -k for curl since custom ssl certs not yet to support in RGW
-  FETCHED_KEY=$(kubectl -n rook-ceph exec $RGW_POD -- curl -k -X GET -H "X-Vault-Token:$VAULT_TOKEN" "$VAULT_SERVER""$VAULT_PATH_PREFIX"/"$RGW_BUCKET_KEY"|jq -r .data.data.key)
-  if [[ "$ENCRYPTION_KEY" != "$FETCHED_KEY" ]]; then
-    echo "The set key $ENCRYPTION_KEY is different from fetched key $FETCHED_KEY"
-    exit 1
+  VAULT_CACERT_FILE=$(kubectl -n rook-ceph describe pods "$RGW_POD" | grep "rgw-crypt-vault-ssl-cacert" | cut -f2- -d=)
+  VAULT_CLIENT_CERT_FILE=$(kubectl -n rook-ceph describe pods "$RGW_POD" | grep "rgw-crypt-vault-ssl-clientcert" | cut -f2- -d=)
+  VAULT_CLIENT_KEY_FILE=$(kubectl -n rook-ceph describe pods "$RGW_POD" | grep "rgw-crypt-vault-ssl-clientkey" | cut -f2- -d=)
+  VAULT_SECRET_ENGINE=$(kubectl -n rook-ceph describe pods "$RGW_POD" | grep "rgw-crypt-vault-secret-engine" | cut -f2- -d=)
+
+  if [[ "$VAULT_SECRET_ENGINE" == "kv" ]]; then
+    # Create secret for RGW server in kv engine
+    ENCRYPTION_KEY=$(openssl rand -base64 32)
+    kubectl exec vault-0 -- vault kv put -ca-cert /vault/userconfig/vault-server-tls/vault.crt rook/ver2/"$RGW_BUCKET_KEY" key="$ENCRYPTION_KEY"
+    #fetch key from vault server using token from RGW pod
+    FETCHED_KEY=$(kubectl -n rook-ceph exec $RGW_POD -- curl --key "$VAULT_CLIENT_KEY_FILE" --cert "$VAULT_CLIENT_CERT_FILE" --cacert "$VAULT_CACERT_FILE" -X GET -H "X-Vault-Token:$VAULT_TOKEN" "$VAULT_SERVER""$VAULT_PATH_PREFIX"/"$RGW_BUCKET_KEY"|jq -r .data.data.key)
+      if [[ "$ENCRYPTION_KEY" != "$FETCHED_KEY" ]]; then
+        echo "The set key $ENCRYPTION_KEY is different from fetched key $FETCHED_KEY"
+        exit 1
+      fi
+  elif [[ "$VAULT_SECRET_ENGINE" == "transit" ]]; then
+    # Create secret for RGW server in transit engine
+    kubectl exec vault-0 -- vault write -ca-cert /vault/userconfig/vault-server-tls/vault.crt -f transit/keys/"$RGW_BUCKET_KEY"
+    # check key exists via curl from RGW pod using credentials
+    HTTP_STATUS=$(kubectl -n rook-ceph exec $RGW_POD -- curl -s -o /dev/null -w "%{http_code}" --key "$VAULT_CLIENT_KEY_FILE" --cert "$VAULT_CLIENT_CERT_FILE" --cacert "$VAULT_CACERT_FILE" -X PUT -H "X-Vault-Token:$VAULT_TOKEN" "$VAULT_SERVER""$VAULT_PATH_PREFIX"/datakey/plaintext/"$RGW_BUCKET_KEY")
+      if [ "$HTTP_STATUS" -ne 200 ] ; then
+        echo "The http status code $HTTP_STATUS is different from 200"
+        exit 1
+      fi
+
   fi
+}
+
+function set_up_vault_kubernetes_auth {
+  # create service account for vault to validate API token
+  kubectl -n "$ROOK_NAMESPACE" create serviceaccount "$ROOK_VAULT_SA"
+
+  # create the RBAC for this SA
+  kubectl -n "$ROOK_NAMESPACE" create clusterrolebinding vault-tokenreview-binding --clusterrole=system:auth-delegator --serviceaccount="$ROOK_NAMESPACE":"$ROOK_VAULT_SA"
+
+  # get the service account common.yaml created earlier
+  VAULT_SA_SECRET_NAME=$(kubectl -n "$ROOK_NAMESPACE" get sa "$ROOK_VAULT_SA" -o jsonpath="{.secrets[*]['name']}")
+
+  # Set SA_JWT_TOKEN value to the service account JWT used to access the TokenReview API
+  SA_JWT_TOKEN=$(kubectl -n "$ROOK_NAMESPACE" get secret "$VAULT_SA_SECRET_NAME" -o jsonpath="{.data.token}" | base64 --decode)
+
+  # Set SA_CA_CRT to the PEM encoded CA cert used to talk to Kubernetes API
+  SA_CA_CRT=$(kubectl -n "$ROOK_NAMESPACE" get secret "$VAULT_SA_SECRET_NAME" -o jsonpath="{.data['ca\.crt']}" | base64 --decode)
+
+  # get kubernetes endpoint
+  K8S_HOST=$(kubectl config view --minify --flatten -o jsonpath="{.clusters[0].cluster.server}")
+
+  # enable kubernetes auth
+  kubectl exec -ti vault-0 -- vault auth enable kubernetes
+
+  # configure the kubernetes auth
+  kubectl exec -ti vault-0 -- vault write auth/kubernetes/config \
+    token_reviewer_jwt="$SA_JWT_TOKEN" \
+    kubernetes_host="$K8S_HOST" \
+    kubernetes_ca_cert="$SA_CA_CRT" \
+    issuer="https://kubernetes.default.svc.cluster.local"
+
+  # configure a role for rook
+  kubectl exec -ti vault-0 -- vault write auth/kubernetes/role/"$ROOK_NAMESPACE" \
+    bound_service_account_names="$ROOK_SYSTEM_SA","$ROOK_OSD_SA" \
+    bound_service_account_namespaces="$ROOK_NAMESPACE" \
+    policies="$VAULT_POLICY_NAME" \
+    ttl=1440h
 }
 
 function validate_osd_deployment {
@@ -196,7 +247,7 @@ function validate_rgw_deployment {
 function validate_osd_secret {
   NB_OSD_PVC=$(kubectl -n rook-ceph get pvc|grep -c set1)
   NB_VAULT_SECRET=$(kubectl -n default exec -ti vault-0 -- vault kv list -ca-cert /vault/userconfig/vault-server-tls/vault.crt rook/ver1|grep -c set1)
-  
+
   if [ "$NB_OSD_PVC" -ne "$NB_VAULT_SECRET" ]; then
     echo "number of osd pvc is $NB_OSD_PVC and number of vault secret is $NB_VAULT_SECRET, mismatch"
     exit 1

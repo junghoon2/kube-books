@@ -45,9 +45,8 @@ import (
 )
 
 var (
-	logger                                            = capnslog.NewPackageLogger("github.com/rook/rook", "op-osd")
-	cephVolumeRawEncryptionModeMinNautilusCephVersion = cephver.CephVersion{Major: 14, Minor: 2, Extra: 11}
-	cephVolumeRawEncryptionModeMinOctopusCephVersion  = cephver.CephVersion{Major: 15, Minor: 2, Extra: 5}
+	logger                                           = capnslog.NewPackageLogger("github.com/rook/rook", "op-osd")
+	cephVolumeRawEncryptionModeMinOctopusCephVersion = cephver.CephVersion{Major: 15, Minor: 2, Extra: 5}
 )
 
 const (
@@ -240,10 +239,9 @@ func (c *Cluster) Start() error {
 }
 
 func (c *Cluster) getExistingOSDDeploymentsOnPVCs() (sets.String, error) {
-	ctx := context.TODO()
 	listOpts := metav1.ListOptions{LabelSelector: fmt.Sprintf("%s=%s,%s", k8sutil.AppAttr, AppName, OSDOverPVCLabelKey)}
 
-	deployments, err := c.context.Clientset.AppsV1().Deployments(c.clusterInfo.Namespace).List(ctx, listOpts)
+	deployments, err := c.context.Clientset.AppsV1().Deployments(c.clusterInfo.Namespace).List(c.clusterInfo.Context, listOpts)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to query existing OSD deployments")
 	}
@@ -406,12 +404,11 @@ func (c *Cluster) getOSDPropsForPVC(pvcName, osdDeviceClass string) (osdProperti
 // First look for the node selector that was previously used for the OSD, or if a new OSD
 // check for the assignment of the OSD prepare job.
 func (c *Cluster) getPVCHostName(pvcName string) (string, error) {
-	ctx := context.TODO()
 	listOpts := metav1.ListOptions{LabelSelector: fmt.Sprintf("%s=%s", OSDOverPVCLabelKey, pvcName)}
 
 	// Check for the existence of the OSD deployment where the node selector was applied
 	// in a previous reconcile.
-	deployments, err := c.context.Clientset.AppsV1().Deployments(c.clusterInfo.Namespace).List(ctx, listOpts)
+	deployments, err := c.context.Clientset.AppsV1().Deployments(c.clusterInfo.Namespace).List(c.clusterInfo.Context, listOpts)
 	if err != nil {
 		return "", errors.Wrapf(err, "failed to get deployment for osd with pvc %q", pvcName)
 	}
@@ -426,12 +423,12 @@ func (c *Cluster) getPVCHostName(pvcName string) (string, error) {
 
 	// Since the deployment wasn't found it must be a new deployment so look at the node
 	// assignment of the OSD prepare pod
-	pods, err := c.context.Clientset.CoreV1().Pods(c.clusterInfo.Namespace).List(ctx, listOpts)
+	pods, err := c.context.Clientset.CoreV1().Pods(c.clusterInfo.Namespace).List(c.clusterInfo.Context, listOpts)
 	if err != nil {
 		return "", errors.Wrapf(err, "failed to get pod for osd with pvc %q", pvcName)
 	}
 	for _, pod := range pods.Items {
-		name, err := k8sutil.GetNodeHostName(c.context.Clientset, pod.Spec.NodeName)
+		name, err := k8sutil.GetNodeHostName(c.clusterInfo.Context, c.context.Clientset, pod.Spec.NodeName)
 		if err != nil {
 			logger.Warningf("falling back to node name %s since hostname not found for node", pod.Spec.NodeName)
 			name = pod.Spec.NodeName
@@ -518,7 +515,7 @@ func (c *Cluster) getOSDInfo(d *appsv1.Deployment) (OSDInfo, error) {
 
 	// if the ROOK_TOPOLOGY_AFFINITY env var was not found in the loop above, detect it from the node
 	if isPVC && osd.TopologyAffinity == "" {
-		osd.TopologyAffinity, err = getTopologyFromNode(c.context.Clientset, d, osd)
+		osd.TopologyAffinity, err = getTopologyFromNode(c.clusterInfo.Context, c.context.Clientset, d, osd)
 		if err != nil {
 			logger.Errorf("failed to get topology affinity for osd %d. %v", osd.ID, err)
 		}
@@ -536,7 +533,7 @@ func (c *Cluster) getOSDInfo(d *appsv1.Deployment) (OSDInfo, error) {
 	}
 
 	if !locationFound {
-		location, _, err := getLocationFromPod(c.context.Clientset, d, cephclient.GetCrushRootFromSpec(&c.spec))
+		location, _, err := getLocationFromPod(c.clusterInfo.Context, c.context.Clientset, d, cephclient.GetCrushRootFromSpec(&c.spec))
 		if err != nil {
 			logger.Errorf("failed to get location. %v", err)
 		} else {
@@ -597,14 +594,13 @@ func getBlockPathFromActivateInitContainer(d *appsv1.Deployment) (string, error)
 	return "", errors.Errorf("failed to find activate init container")
 }
 
-func getLocationFromPod(clientset kubernetes.Interface, d *appsv1.Deployment, crushRoot string) (string, string, error) {
-	ctx := context.TODO()
+func getLocationFromPod(ctx context.Context, clientset kubernetes.Interface, d *appsv1.Deployment, crushRoot string) (string, string, error) {
 	pods, err := clientset.CoreV1().Pods(d.Namespace).List(ctx, metav1.ListOptions{LabelSelector: fmt.Sprintf("%s=%s", OsdIdLabelKey, d.Labels[OsdIdLabelKey])})
 	if err != nil || len(pods.Items) == 0 {
 		return "", "", err
 	}
 	nodeName := pods.Items[0].Spec.NodeName
-	hostName, err := k8sutil.GetNodeHostName(clientset, nodeName)
+	hostName, err := k8sutil.GetNodeHostName(ctx, clientset, nodeName)
 	if err != nil {
 		return "", "", err
 	}
@@ -615,10 +611,10 @@ func getLocationFromPod(clientset kubernetes.Interface, d *appsv1.Deployment, cr
 			hostName = pvcName
 		}
 	}
-	return GetLocationWithNode(clientset, nodeName, crushRoot, hostName)
+	return GetLocationWithNode(ctx, clientset, nodeName, crushRoot, hostName)
 }
 
-func getTopologyFromNode(clientset kubernetes.Interface, d *appsv1.Deployment, osd OSDInfo) (string, error) {
+func getTopologyFromNode(ctx context.Context, clientset kubernetes.Interface, d *appsv1.Deployment, osd OSDInfo) (string, error) {
 	portable, ok := d.GetLabels()[portableKey]
 	if !ok || portable != "true" {
 		// osd is not portable, no need to load the topology affinity
@@ -627,7 +623,6 @@ func getTopologyFromNode(clientset kubernetes.Interface, d *appsv1.Deployment, o
 	logger.Infof("detecting topology affinity for osd %d after upgrade", osd.ID)
 
 	// Get the osd pod and its assigned node, then look up the node labels
-	ctx := context.TODO()
 	pods, err := clientset.CoreV1().Pods(d.Namespace).List(ctx, metav1.ListOptions{LabelSelector: fmt.Sprintf("%s=%s", OsdIdLabelKey, d.Labels[OsdIdLabelKey])})
 	if err != nil {
 		return "", errors.Wrap(err, "failed to get osd pod")
@@ -639,7 +634,7 @@ func getTopologyFromNode(clientset kubernetes.Interface, d *appsv1.Deployment, o
 	if nodeName == "" {
 		return "", errors.Errorf("osd %d is not assigned to a node, cannot detect topology affinity", osd.ID)
 	}
-	node, err := getNode(clientset, nodeName)
+	node, err := getNode(ctx, clientset, nodeName)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to get the node for topology affinity")
 	}
@@ -652,8 +647,8 @@ func getTopologyFromNode(clientset kubernetes.Interface, d *appsv1.Deployment, o
 //  location: The CRUSH properties for the OSD to apply
 //  topologyAffinity: The label to be applied to the OSD daemon to guarantee it will start in the same
 //		topology as the OSD prepare job.
-func GetLocationWithNode(clientset kubernetes.Interface, nodeName string, crushRoot, crushHostname string) (string, string, error) {
-	node, err := getNode(clientset, nodeName)
+func GetLocationWithNode(ctx context.Context, clientset kubernetes.Interface, nodeName string, crushRoot, crushHostname string) (string, string, error) {
+	node, err := getNode(ctx, clientset, nodeName)
 	if err != nil {
 		return "", "", errors.Wrap(err, "could not get the node for topology labels")
 	}
@@ -682,8 +677,7 @@ func GetLocationWithNode(clientset kubernetes.Interface, nodeName string, crushR
 
 // getNode will try to get the node object for the provided nodeName
 // it will try using the node's name it's hostname label
-func getNode(clientset kubernetes.Interface, nodeName string) (*corev1.Node, error) {
-	ctx := context.TODO()
+func getNode(ctx context.Context, clientset kubernetes.Interface, nodeName string) (*corev1.Node, error) {
 	var node *corev1.Node
 	var err error
 	// try to find by the node by matching the provided nodeName
@@ -741,13 +735,13 @@ func (c *Cluster) applyUpgradeOSDFunctionality() {
 				logger.Warningf("failed to extract ceph version. %v", err)
 				return
 			}
-			// if the version of these OSDs is Octopus then we run the command
-			if osdVersion.IsOctopus() {
-				err = cephclient.EnableReleaseOSDFunctionality(c.context, c.clusterInfo, "octopus")
-				if err != nil {
-					logger.Warningf("failed to enable new osd functionality. %v", err)
-					return
-				}
+			// Ensure the required version of OSDs is set to the current consistent version,
+			// enabling the latest osd functionality and also preventing downgrades to a
+			// previous major ceph version.
+			err = cephclient.EnableReleaseOSDFunctionality(c.context, c.clusterInfo, osdVersion.ReleaseName())
+			if err != nil {
+				logger.Warningf("failed to enable new osd functionality. %v", err)
+				return
 			}
 		}
 	}

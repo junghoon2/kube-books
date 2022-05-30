@@ -138,14 +138,10 @@ func SetOrRemoveDefaultConfigs(
 		}
 	}
 
-	if err := monStore.SetAll(DefaultLegacyConfigs()...); err != nil {
-		return errors.Wrapf(err, "failed to apply legacy config overrides")
-	}
-
 	// Apply Multus if needed
 	if clusterSpec.Network.IsMultus() {
 		logger.Info("configuring ceph network(s) with multus")
-		cephNetworks, err := generateNetworkSettings(context, clusterInfo.Namespace, clusterSpec.Network.Selectors)
+		cephNetworks, err := generateNetworkSettings(clusterInfo.Context, context, clusterInfo.Namespace, clusterSpec.Network.Selectors)
 		if err != nil {
 			return errors.Wrap(err, "failed to generate network settings")
 		}

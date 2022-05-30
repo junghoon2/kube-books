@@ -16,7 +16,7 @@ This chart bootstraps a [rook-ceph-operator](https://github.com/rook/rook) deplo
 
 ## Prerequisites
 
-* Kubernetes 1.13+
+* Kubernetes 1.17+
 * Helm 3.x
 
 See the [Helm support matrix](https://helm.sh/docs/topics/version_skew/) for more details.
@@ -31,46 +31,16 @@ The `helm install` command deploys rook on the Kubernetes cluster in the default
 
 Rook currently publishes builds of the Ceph operator to the `release` and `master` channels.
 
-### Release
+### **Release**
 
 The release channel is the most recent release of Rook that is considered stable for the community.
 
 ```console
 helm repo add rook-release https://charts.rook.io/release
-helm install --create-namespace --namespace rook-ceph rook-ceph rook-release/rook-ceph
+helm install --create-namespace --namespace rook-ceph rook-ceph rook-release/rook-ceph -f values.yaml
 ```
 
-### Development Build
-
-To deploy from a local build from your development environment:
-
-1. Build the Rook docker image: `make`
-1. Copy the image to your K8s cluster, such as with the `docker save` then the `docker load` commands
-1. Install the helm chart:
-
-```console
-cd cluster/charts/rook-ceph
-kubectl create namespace rook-ceph
-helm install --namespace rook-ceph rook-ceph .
-```
-
-## Uninstalling the Chart
-
-To see the currently installed Rook chart:
-
-```console
-helm ls --namespace rook-ceph
-```
-
-To uninstall/delete the `rook-ceph` deployment:
-
-```console
-helm delete --namespace rook-ceph rook-ceph
-```
-
-The command removes all the Kubernetes components associated with the chart and deletes the release.
-
-After uninstalling you may want to clean up the CRDs as described on the [teardown documentation](ceph-teardown.md#removing-the-cluster-crd-finalizer).
+For example settings, see the next section or [values.yaml](https://github.com/rook/rook/tree/{{ branchName }}/deploy/charts/rook-ceph/values.yaml)
 
 ## Configuration
 
@@ -106,11 +76,15 @@ The following tables lists the configurable parameters of the rook-operator char
 | `csi.provisionerPriorityClassName`  | PriorityClassName to be set on csi driver provisioner pods.                                                                 | <none>                                                    |
 | `csi.enableOMAPGenerator`           | EnableOMAP generator deploys omap sidecar in CSI provisioner pod, to enable it set it to true                               | `false`                                                   |
 | `csi.rbdFSGroupPolicy`              | Policy for modifying a volume's ownership or permissions when the RBD PVC is being mounted                                  | ReadWriteOnceWithFSType                                   |
-| `csi.cephFSFSGroupPolicy`           | Policy for modifying a volume's ownership or permissions when the CephFS PVC is being mounted                               | `None`                                                    |
+| `csi.cephFSFSGroupPolicy`           | Policy for modifying a volume's ownership or permissions when the CephFS PVC is being mounted                               | ReadWriteOnceWithFSType                                   |
+| `csi.nfsFSGroupPolicy`              | Policy for modifying a volume's ownership or permissions when the NFS PVC is being mounted                                  | ReadWriteOnceWithFSType                                   |
 | `csi.logLevel`                      | Set logging level for csi containers. Supported values from 0 to 5. 0 for general useful logs, 5 for trace level verbosity. | `0`                                                       |
+| `csi.grpcTimeoutInSeconds`           | Set GRPC timeout for csi containers.                                                                                       | `150`                                                     |
 | `csi.provisionerReplicas`           | Set replicas for csi provisioner deployment.                                                                                | `2`                                                       |
 | `csi.enableGrpcMetrics`             | Enable Ceph CSI GRPC Metrics.                                                                                               | `false`                                                   |
 | `csi.enableCSIHostNetwork`          | Enable Host Networking for Ceph CSI nodeplugins.                                                                            | `false`                                                   |
+| `csi.enablePluginSelinuxHostMount`  | Enable Host mount for /etc/selinux directory for Ceph CSI nodeplugins.                                                      | `false`                                                   |
+| `csi.enableCSIEncryption`           | Enable Ceph CSI PVC encryption support.                                                                                     | `false`                                                   |
 | `csi.provisionerTolerations`        | Array of tolerations in YAML format which will be added to CSI provisioner deployment.                                      | <none>                                                    |
 | `csi.provisionerNodeAffinity`       | The node labels for affinity of the CSI provisioner deployment (***)                                                        | <none>                                                    |
 | `csi.pluginTolerations`             | Array of tolerations in YAML format which will be added to CephCSI plugin DaemonSet                                         | <none>                                                    |
@@ -123,58 +97,74 @@ The following tables lists the configurable parameters of the rook-operator char
 | `csi.cephFSProvisionerNodeAffinity` | The node labels for affinity of the CephCSI CephFS provisioner deployment (***)                                             | <none>                                                    |
 | `csi.cephFSPluginTolerations`       | Array of tolerations in YAML format which will be added to CephCSI CephFS plugin DaemonSet                                  | <none>                                                    |
 | `csi.cephFSPluginNodeAffinity`      | The node labels for affinity of the CephCSI CephFS plugin DaemonSet (***)                                                   | <none>                                                    |
+| `csi.nfsProvisionerTolerations`     | Array of tolerations in YAML format which will be added to CephCSI NFS provisioner deployment.                               | <none>                                                    |
+| `csi.nfsProvisionerNodeAffinity`    | The node labels for affinity of the CephCSI NFS provisioner deployment (***)                                                  | <none>                                                    |
+| `csi.nfsPluginTolerations`          | Array of tolerations in YAML format which will be added to CephCSI NFS plugin DaemonSet                                     | <none>                                                    |
+| `csi.nfsPluginNodeAffinity`         | The node labels for affinity of the CephCSI NFS plugin DaemonSet (***)                                                      | <none>                                                    |
 | `csi.csiRBDProvisionerResource`     | CEPH CSI RBD provisioner resource requirement list.                                                                         | <none>                                                    |
 | `csi.csiRBDPluginResource`          | CEPH CSI RBD plugin resource requirement list.                                                                              | <none>                                                    |
 | `csi.csiCephFSProvisionerResource`  | CEPH CSI CephFS provisioner resource requirement list.                                                                      | <none>                                                    |
 | `csi.csiCephFSPluginResource`       | CEPH CSI CephFS plugin resource requirement list.                                                                           | <none>                                                    |
+| `csi.csiNFSProvisionerResource`     | CEPH CSI NFS provisioner resource requirement list.                                                                           | <none>                                                    |
+| `csi.csiNFSPluginResource`          | CEPH CSI NFS plugin resource requirement list.                                                                              | <none>                                                    |
 | `csi.cephfsGrpcMetricsPort`         | CSI CephFS driver GRPC metrics port.                                                                                        | `9091`                                                    |
 | `csi.cephfsLivenessMetricsPort`     | CSI CephFS driver metrics port.                                                                                             | `9081`                                                    |
 | `csi.rbdGrpcMetricsPort`            | Ceph CSI RBD driver GRPC metrics port.                                                                                      | `9090`                                                    |
+| `csi.csiAddonsPort`            | CSI Addons server port.                                                                                      | `9070`                                                    |
 | `csi.rbdLivenessMetricsPort`        | Ceph CSI RBD driver metrics port.                                                                                           | `8080`                                                    |
 | `csi.forceCephFSKernelClient`       | Enable Ceph Kernel clients on kernel < 4.17 which support quotas for Cephfs.                                                | `true`                                                    |
 | `csi.kubeletDirPath`                | Kubelet root directory path (if the Kubelet uses a different path for the `--root-dir` flag)                                | `/var/lib/kubelet`                                        |
-| `csi.cephcsi.image`                 | Ceph CSI image.                                                                                                             | `quay.io/cephcsi/cephcsi:v3.4.0`                          |
-| `csi.rbdPluginUpdateStrategy`       | CSI Rbd plugin daemonset update strategy, supported values are OnDelete and RollingUpdate.                                  | `OnDelete`                                                |
-| `csi.cephFSPluginUpdateStrategy`    | CSI CephFS plugin daemonset update strategy, supported values are OnDelete and RollingUpdate.                               | `OnDelete`                                                |
-| `csi.registrar.image`               | Kubernetes CSI registrar image.                                                                                             | `k8s.gcr.io/sig-storage/csi-node-driver-registrar:v2.3.0` |
-| `csi.resizer.image`                 | Kubernetes CSI resizer image.                                                                                               | `k8s.gcr.io/sig-storage/csi-resizer:v1.3.0`               |
-| `csi.provisioner.image`             | Kubernetes CSI provisioner image.                                                                                           | `k8s.gcr.io/sig-storage/csi-provisioner:v3.0.0`           |
-| `csi.snapshotter.image`             | Kubernetes CSI snapshotter image.                                                                                           | `k8s.gcr.io/sig-storage/csi-snapshotter:v4.2.0`           |
-| `csi.attacher.image`                | Kubernetes CSI Attacher image.                                                                                              | `k8s.gcr.io/sig-storage/csi-attacher:v3.3.0`              |
+| `csi.cephcsi.image`                 | Ceph CSI image.                                                                                                             | `quay.io/cephcsi/cephcsi:v3.6.1`                          |
+| `csi.rbdPluginUpdateStrategy`       | CSI Rbd plugin daemonset update strategy, supported values are OnDelete and RollingUpdate.                                  | `RollingUpdate`                                           |
+| `csi.cephFSPluginUpdateStrategy`    | CSI CephFS plugin daemonset update strategy, supported values are OnDelete and RollingUpdate.                               | `RollingUpdate`                                           |
+| `csi.nfsPluginUpdateStrategy`       | CSI NFS plugin daemonset update strategy, supported values are OnDelete and RollingUpdate.                                  | `RollingUpdate`                                           |
+| `csi.registrar.image`               | Kubernetes CSI registrar image.                                                                                             | `k8s.gcr.io/sig-storage/csi-node-driver-registrar:v2.5.0` |
+| `csi.resizer.image`                 | Kubernetes CSI resizer image.                                                                                               | `k8s.gcr.io/sig-storage/csi-resizer:v1.4.0`               |
+| `csi.provisioner.image`             | Kubernetes CSI provisioner image.                                                                                           | `k8s.gcr.io/sig-storage/csi-provisioner:v3.1.0`           |
+| `csi.snapshotter.image`             | Kubernetes CSI snapshotter image.                                                                                           | `k8s.gcr.io/sig-storage/csi-snapshotter:v5.0.1`           |
+| `csi.attacher.image`                | Kubernetes CSI Attacher image.                                                                                              | `k8s.gcr.io/sig-storage/csi-attacher:v3.4.0`              |
 | `csi.cephfsPodLabels`               | Labels to add to the CSI CephFS Pods.                                                                                       | <none>                                                    |
 | `csi.rbdPodLabels`                  | Labels to add to the CSI RBD Pods.                                                                                          | <none>                                                    |
 | `csi.volumeReplication.enabled`     | Enable Volume Replication.                                                                                                  | `false`                                                   |
-| `csi.volumeReplication.image`       | Volume Replication Controller image.                                                                                        | `quay.io/csiaddons/volumereplication-operator:v0.1.0`     |
-| `agent.flexVolumeDirPath`           | Path where the Rook agent discovers the flex volume plugins (*)                                                             | `/usr/libexec/kubernetes/kubelet-plugins/volume/exec/`    |
-| `agent.libModulesDirPath`           | Path where the Rook agent should look for kernel modules (*)                                                                | `/lib/modules`                                            |
-| `agent.mounts`                      | Additional paths to be mounted in the agent container (**)                                                                  | <none>                                                    |
-| `agent.mountSecurityMode`           | Mount Security Mode for the agent.                                                                                          | `Any`                                                     |
-| `agent.priorityClassName`           | The priority class name to add to the agent pods                                                                            | <none>                                                    |
-| `agent.toleration`                  | Toleration for the agent pods                                                                                               | <none>                                                    |
-| `agent.tolerationKey`               | The specific key of the taint to tolerate                                                                                   | <none>                                                    |
-| `agent.tolerations`                 | Array of tolerations in YAML format which will be added to agent deployment                                                 | <none>                                                    |
-| `agent.nodeAffinity`                | The node labels for affinity of `rook-agent` (***)                                                                          | <none>                                                    |
+| `csi.volumeReplication.image`       | Volume Replication Controller image.                                                                                        | `quay.io/csiaddons/volumereplication-operator:v0.3.0`     |
+| `csi.csiAddons.enabled`     | Enable CSIAddons                                                                                                  | `false`                                                   |
+| `csi.csiAddons.image`       | CSIAddons Sidecar image.                                                                                        | `quay.io/csiaddons/k8s-sidecar:v0.2.1`     |
+| `csi.nfs.enabled`                   | Enable nfs driver.                                                                                                          | `false`                                                   |
+| `csi.nfs.image`                     | NFS nodeplugin image.                                                                                                       | `k8s.gcr.io/sig-storage/nfsplugin:v3.1.0`                |
 | `admissionController.tolerations`   | Array of tolerations in YAML format which will be added to admission controller deployment.                                 | <none>                                                    |
 | `admissionController.nodeAffinity`  | The node labels for affinity of the admission controller deployment (***)                                                   | <none>                                                    |
-| `allowMultipleFilesystems`          | **(experimental)** Allows multiple filesystems to be deployed to a Ceph cluster. Octopus (v15) or Nautilus (v14)            | `false`                                                   |
-
-&ast; For information on what to set `agent.flexVolumeDirPath` to, please refer to the [Rook flexvolume documentation](flexvolume.md)
-
-&ast; &ast; `agent.mounts` should have this format `mountname1=/host/path:/container/path,mountname2=/host/path2:/container/path2`
+| `monitoring.enabled`                | Create necessary RBAC rules for Rook to integrate with Prometheus monitoring in the operator namespace. Requires Prometheus to be pre-installed. | `false` |
 
 &ast; &ast; &ast; `nodeAffinity` and `*NodeAffinity` options should have the format `"role=storage,rook; storage=ceph"` or `storage=;role=rook-example` or `storage=;` (_checks only for presence of key_)
 
-### Command Line
 
-You can pass the settings with helm command line parameters. Specify each parameter using the
-`--set key=value[,key=value]` argument to `helm install`.
+### **Development Build**
 
-### Settings File
+To deploy from a local build from your development environment:
 
-Alternatively, a yaml file that specifies the values for the above parameters (`values.yaml`) can be provided while installing the chart.
+1. Build the Rook docker image: `make`
+1. Copy the image to your K8s cluster, such as with the `docker save` then the `docker load` commands
+1. Install the helm chart:
 
 ```console
-helm install --namespace rook-ceph rook-ceph rook-release/rook-ceph -f values.yaml
+cd deploy/charts/rook-ceph
+helm install --create-namespace --namespace rook-ceph rook-ceph .
 ```
 
-For example settings, see [values.yaml](https://github.com/rook/rook/tree/{{ branchName }}/cluster/charts/rook-ceph/values.yaml)
+## Uninstalling the Chart
+
+To see the currently installed Rook chart:
+
+```console
+helm ls --namespace rook-ceph
+```
+
+To uninstall/delete the `rook-ceph` deployment:
+
+```console
+helm delete --namespace rook-ceph rook-ceph
+```
+
+The command removes all the Kubernetes components associated with the chart and deletes the release.
+
+After uninstalling you may want to clean up the CRDs as described on the [teardown documentation](ceph-teardown.md#removing-the-cluster-crd-finalizer).

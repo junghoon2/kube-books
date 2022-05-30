@@ -34,15 +34,12 @@ import (
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	"github.com/rook/rook/pkg/operator/ceph/disruption/controllerconfig"
 	"github.com/rook/rook/pkg/operator/k8sutil"
-	policyv1 "k8s.io/api/policy/v1"
-	policyv1beta1 "k8s.io/api/policy/v1beta1"
 )
 
 const (
 	controllerName = "clusterdisruption-controller"
 	// pdbStateMapName for the clusterdisruption pdb state map
 	pdbStateMapName        = "rook-ceph-pdbstatemap"
-	legacyOSDPDBLabel      = "rook-ceph-osd-pdb"
 	legacyDrainCanaryLabel = "rook-ceph-drain-canary"
 )
 
@@ -89,7 +86,7 @@ func (r *ReconcileClusterDisruption) reconcile(request reconcile.Request) (recon
 
 	// get the ceph cluster
 	cephClusters := &cephv1.CephClusterList{}
-	if err := r.client.List(context.TODO(), cephClusters, client.InNamespace(request.Namespace)); err != nil {
+	if err := r.client.List(r.context.OpManagerContext, cephClusters, client.InNamespace(request.Namespace)); err != nil {
 		return reconcile.Result{}, errors.Wrapf(err, "could not get cephclusters in namespace %q", request.Namespace)
 	}
 	if len(cephClusters.Items) == 0 {
@@ -109,6 +106,7 @@ func (r *ReconcileClusterDisruption) reconcile(request reconcile.Request) (recon
 		logger.Infof("clusterName is not known for namespace %q", request.Namespace)
 		return reconcile.Result{Requeue: true, RequeueAfter: 5 * time.Second}, errors.New("clusterName for this namespace not yet known")
 	}
+	clusterInfo.Context = r.context.OpManagerContext
 
 	// ensure that the cluster name is populated
 	if request.Name == "" {
@@ -121,15 +119,8 @@ func (r *ReconcileClusterDisruption) reconcile(request reconcile.Request) (recon
 	}
 
 	if deleteLegacyResources {
-		// delete any legacy blocking PDBs for osd
-		err := r.deleteLegacyPDBForOSD(clusterInfo.Namespace)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-		logger.Info("deleted all legacy blocking PDBs for osds")
-
 		// delete any legacy node drain canary pods
-		err = r.deleteDrainCanaryPods(clusterInfo.Namespace)
+		err := r.deleteDrainCanaryPods(clusterInfo.Namespace)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
@@ -253,29 +244,10 @@ func (c *ClusterMap) GetClusterNamespaces() []string {
 }
 
 func (r *ReconcileClusterDisruption) deleteDrainCanaryPods(namespace string) error {
-	err := r.client.DeleteAllOf(context.TODO(), &appsv1.Deployment{}, client.InNamespace(namespace),
+	err := r.client.DeleteAllOf(r.context.OpManagerContext, &appsv1.Deployment{}, client.InNamespace(namespace),
 		client.MatchingLabels{k8sutil.AppAttr: legacyDrainCanaryLabel})
 	if err != nil && !kerrors.IsNotFound(err) {
 		return errors.Wrapf(err, "failed to delete all the legacy drain-canary pods with label %q", legacyDrainCanaryLabel)
-	}
-	return nil
-}
-
-func (r *ReconcileClusterDisruption) deleteLegacyPDBForOSD(namespace string) error {
-	var podDisruptionBudget client.Object
-	usePDBV1Beta1, err := k8sutil.UsePDBV1Beta1Version(r.context.ClusterdContext.Clientset)
-	if err != nil {
-		return errors.Wrap(err, "failed to fetch pdb version")
-	}
-	if usePDBV1Beta1 {
-		podDisruptionBudget = &policyv1beta1.PodDisruptionBudget{}
-	} else {
-		podDisruptionBudget = &policyv1.PodDisruptionBudget{}
-	}
-	err = r.client.DeleteAllOf(context.TODO(), podDisruptionBudget, client.InNamespace(namespace),
-		client.MatchingLabels{k8sutil.AppAttr: legacyOSDPDBLabel})
-	if err != nil && !kerrors.IsNotFound(err) {
-		return errors.Wrapf(err, "failed to delete legacy OSD PDBs with label %q", legacyOSDPDBLabel)
 	}
 	return nil
 }

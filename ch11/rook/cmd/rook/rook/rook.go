@@ -17,6 +17,7 @@ limitations under the License.
 package rook
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"reflect"
@@ -28,16 +29,14 @@ import (
 	rookclient "github.com/rook/rook/pkg/client/clientset/versioned"
 	"github.com/rook/rook/pkg/clusterd"
 	"github.com/rook/rook/pkg/operator/k8sutil"
+	"github.com/rook/rook/pkg/util"
 	"github.com/rook/rook/pkg/util/exec"
 	"github.com/rook/rook/pkg/util/flags"
 	"github.com/rook/rook/pkg/version"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-	"github.com/tevino/abool"
 	v1 "k8s.io/api/core/v1"
-	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	"k8s.io/apimachinery/pkg/util/uuid"
-	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -56,20 +55,15 @@ var (
 	logLevelRaw        string
 	operatorImage      string
 	serviceAccountName string
-	Cfg                = &Config{}
 	logger             = capnslog.NewPackageLogger("github.com/rook/rook", "rookcmd")
 )
-
-type Config struct {
-	LogLevel capnslog.LogLevel
-}
 
 // Initialize the configuration parameters. The precedence from lowest to highest is:
 //  1) default value (at compilation)
 //  2) environment variables (upper case, replace - with _, and rook prefix. For example, discovery-url is ROOK_DISCOVERY_URL)
 //  3) command line parameter
 func init() {
-	RootCmd.PersistentFlags().StringVar(&logLevelRaw, "log-level", "INFO", "logging level for logging/tracing output (valid values: CRITICAL,ERROR,WARNING,NOTICE,INFO,DEBUG,TRACE)")
+	RootCmd.PersistentFlags().StringVar(&logLevelRaw, "log-level", "INFO", "logging level for logging/tracing output (valid values: ERROR,WARNING,INFO,DEBUG)")
 	RootCmd.PersistentFlags().StringVar(&operatorImage, "operator-image", "", "Override the image url that the operator uses. The default is read from the operator pod.")
 	RootCmd.PersistentFlags().StringVar(&serviceAccountName, "service-account", "", "Override the service account that the operator uses. The default is read from the operator pod.")
 
@@ -80,13 +74,7 @@ func init() {
 
 // SetLogLevel set log level based on provided log option.
 func SetLogLevel() {
-	// parse given log level string then set up corresponding global logging level
-	ll, err := capnslog.ParseLevel(logLevelRaw)
-	if err != nil {
-		logger.Warningf("failed to set log level %s. %+v", logLevelRaw, err)
-	}
-	Cfg.LogLevel = ll
-	capnslog.SetGlobalLogLevel(Cfg.LogLevel)
+	util.SetGlobalLogLevel(logLevelRaw, logger)
 }
 
 // LogStartupInfo log the version number, arguments, and all final flag values (environment variable overrides have already been taken into account)
@@ -102,10 +90,8 @@ func NewContext() *clusterd.Context {
 	var err error
 
 	context := &clusterd.Context{
-		Executor:    &exec.CommandExecutor{},
-		NetworkInfo: clusterd.NetworkInfo{},
-		ConfigDir:   k8sutil.DataDir,
-		LogLevel:    Cfg.LogLevel,
+		Executor:  &exec.CommandExecutor{},
+		ConfigDir: k8sutil.DataDir,
 	}
 
 	// Try to read config from in-cluster env
@@ -157,26 +143,16 @@ func NewContext() *clusterd.Context {
 	context.RemoteExecutor.ClientSet = context.Clientset
 	context.RemoteExecutor.RestClient = context.KubeConfig
 
-	// Dynamic clientset allows dealing with resources that aren't statically typed but determined
-	// at runtime.
-	context.DynamicClientset, err = dynamic.NewForConfig(context.KubeConfig)
-	TerminateOnError(err, "failed to create dynamic clientset")
-
-	context.APIExtensionClientset, err = apiextensionsclient.NewForConfig(context.KubeConfig)
-	TerminateOnError(err, "failed to create k8s API extension clientset")
-
 	context.RookClientset, err = rookclient.NewForConfig(context.KubeConfig)
 	TerminateOnError(err, "failed to create rook clientset")
 
 	context.NetworkClient, err = netclient.NewForConfig(context.KubeConfig)
 	TerminateOnError(err, "failed to create network clientset")
 
-	context.RequestCancelOrchestration = abool.New()
-
 	return context
 }
 
-func GetOperatorImage(clientset kubernetes.Interface, containerName string) string {
+func GetOperatorImage(ctx context.Context, clientset kubernetes.Interface, containerName string) string {
 
 	// If provided as a flag then use that value
 	if operatorImage != "" {
@@ -184,7 +160,7 @@ func GetOperatorImage(clientset kubernetes.Interface, containerName string) stri
 	}
 
 	// Getting the info of the operator pod
-	pod, err := k8sutil.GetRunningPod(clientset)
+	pod, err := k8sutil.GetRunningPod(ctx, clientset)
 	TerminateOnError(err, "failed to get pod")
 
 	// Get the actual operator container image name
@@ -194,7 +170,7 @@ func GetOperatorImage(clientset kubernetes.Interface, containerName string) stri
 	return containerImage
 }
 
-func GetOperatorServiceAccount(clientset kubernetes.Interface) string {
+func GetOperatorServiceAccount(ctx context.Context, clientset kubernetes.Interface) string {
 
 	// If provided as a flag then use that value
 	if serviceAccountName != "" {
@@ -202,15 +178,15 @@ func GetOperatorServiceAccount(clientset kubernetes.Interface) string {
 	}
 
 	// Getting the info of the operator pod
-	pod, err := k8sutil.GetRunningPod(clientset)
+	pod, err := k8sutil.GetRunningPod(ctx, clientset)
 	TerminateOnError(err, "failed to get pod")
 
 	return pod.Spec.ServiceAccountName
 }
 
-func CheckOperatorResources(clientset kubernetes.Interface) {
+func CheckOperatorResources(ctx context.Context, clientset kubernetes.Interface) {
 	// Getting the info of the operator pod
-	pod, err := k8sutil.GetRunningPod(clientset)
+	pod, err := k8sutil.GetRunningPod(ctx, clientset)
 	TerminateOnError(err, "failed to get pod")
 	resource := pod.Spec.Containers[0].Resources
 	// set env var if operator pod resources are set
@@ -229,23 +205,21 @@ func TerminateOnError(err error, msg string) {
 // TerminateFatal terminates the process with an exit code of 1
 // and writes the given reason to stderr and the termination log file.
 func TerminateFatal(reason error) {
-	fmt.Fprintln(os.Stderr, reason)
-
 	file, err := os.OpenFile(terminationLog, os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, fmt.Errorf("failed to write message to termination log: %+v", err))
+		fmt.Fprintln(os.Stderr, fmt.Errorf("failed to write message to termination log: %v", err))
 	} else {
-		// #nosec G307 Calling defer to close the file without checking the error return is not a risk for a simple file open and close
+		//nolint:gosec // Calling defer to close the file without checking the error return is not a risk for a simple file open and close
 		defer file.Close()
 		if _, err = file.WriteString(reason.Error()); err != nil {
-			fmt.Fprintln(os.Stderr, fmt.Errorf("failed to write message to termination log: %+v", err))
+			fmt.Fprintln(os.Stderr, fmt.Errorf("failed to write message to termination log: %v", err))
 		}
 		if err := file.Close(); err != nil {
-			logger.Errorf("failed to close file. %v", err)
+			logger.Fatalf("failed to close file. %v", err)
 		}
 	}
 
-	os.Exit(1)
+	logger.Fatalln(reason)
 }
 
 // GetOperatorBaseImageCephVersion returns the Ceph version of the operator image

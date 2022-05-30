@@ -17,8 +17,10 @@ limitations under the License.
 package ceph
 
 import (
+	"context"
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 
 	"k8s.io/client-go/kubernetes"
@@ -70,7 +72,8 @@ var (
 	blockPath               string
 	lvBackedPV              bool
 	osdIDsToRemove          string
-	preservePVC             bool
+	preservePVC             string
+	forceOSDRemoval         string
 )
 
 func addOSDFlags(command *cobra.Command) {
@@ -99,7 +102,8 @@ func addOSDFlags(command *cobra.Command) {
 
 	// flags for removing OSDs that are unhealthy or otherwise should be purged from the cluster
 	osdRemoveCmd.Flags().StringVar(&osdIDsToRemove, "osd-ids", "", "OSD IDs to remove from the cluster")
-	osdRemoveCmd.Flags().BoolVar(&preservePVC, "preserve-pvc", false, "Whether PVCs for OSDs will be deleted")
+	osdRemoveCmd.Flags().StringVar(&preservePVC, "preserve-pvc", "false", "Whether PVCs for OSDs will be deleted")
+	osdRemoveCmd.Flags().StringVar(&forceOSDRemoval, "force-osd-removal", "false", "Whether to force remove the OSD")
 
 	// add the subcommands to the parent osd command
 	osdCmd.AddCommand(osdConfigCmd,
@@ -215,7 +219,7 @@ func prepareOSD(cmd *cobra.Command, args []string) error {
 
 	context := createContext()
 	commonOSDInit(provisionCmd)
-	crushLocation, topologyAffinity, err := getLocation(context.Clientset)
+	crushLocation, topologyAffinity, err := getLocation(cmd.Context(), context.Clientset)
 	if err != nil {
 		rook.TerminateFatal(err)
 	}
@@ -226,6 +230,7 @@ func prepareOSD(cmd *cobra.Command, args []string) error {
 	ownerRef := opcontroller.ClusterOwnerRef(clusterName, ownerRefID)
 	ownerInfo := k8sutil.NewOwnerInfoWithOwnerRef(&ownerRef, clusterInfo.Namespace)
 	clusterInfo.OwnerInfo = ownerInfo
+	clusterInfo.Context = cmd.Context()
 	kv := k8sutil.NewConfigMapKVStore(clusterInfo.Namespace, context.Clientset, ownerInfo)
 	agent := osddaemon.NewAgent(context, dataDevices, cfg.metadataDevice, forceFormat,
 		cfg.storeConfig, &clusterInfo, cfg.nodeName, kv, cfg.pvcBacked)
@@ -238,7 +243,7 @@ func prepareOSD(cmd *cobra.Command, args []string) error {
 			Message:      err.Error(),
 			PvcBackedOSD: cfg.pvcBacked,
 		}
-		oposd.UpdateNodeOrPVCStatus(kv, cfg.nodeName, status)
+		oposd.UpdateNodeOrPVCStatus(clusterInfo.Context, kv, cfg.nodeName, status)
 
 		rook.TerminateFatal(err)
 	}
@@ -261,11 +266,31 @@ func removeOSDs(cmd *cobra.Command, args []string) error {
 
 	context := createContext()
 
+	clusterInfo.Context = cmd.Context()
+
+	// We use strings instead of bool since the flag package has issues with parsing bools, or
+	// perhaps it's the translation between YAML and code... It's unclear but see:
+	// starting Rook v1.7.0-alpha.0.660.gb13faecc8 with arguments '/usr/local/bin/rook ceph osd remove --preserve-pvc false --force-osd-removal false --osd-ids 1'
+	// flag values: --force-osd-removal=true, --help=false, --log-level=DEBUG, --operator-image=,
+	// --osd-ids=1, --preserve-pvc=true, --service-account=
+	//
+	// Bools are false but they are interpreted true by the flag package.
+
+	forceOSDRemovalBool, err := strconv.ParseBool(forceOSDRemoval)
+	if err != nil {
+		return errors.Wrapf(err, "failed to parse --force-osd-removal flag")
+	}
+	preservePVCBool, err := strconv.ParseBool(preservePVC)
+	if err != nil {
+		return errors.Wrapf(err, "failed to parse --preserve-pvc flag")
+	}
+
 	// Run OSD remove sequence
-	err := osddaemon.RemoveOSDs(context, &clusterInfo, strings.Split(osdIDsToRemove, ","), preservePVC)
+	err = osddaemon.RemoveOSDs(context, &clusterInfo, strings.Split(osdIDsToRemove, ","), preservePVCBool, forceOSDRemovalBool)
 	if err != nil {
 		rook.TerminateFatal(err)
 	}
+
 	return nil
 }
 
@@ -277,13 +302,13 @@ func commonOSDInit(cmd *cobra.Command) {
 }
 
 // use zone/region/hostname labels in the crushmap
-func getLocation(clientset kubernetes.Interface) (string, string, error) {
+func getLocation(ctx context.Context, clientset kubernetes.Interface) (string, string, error) {
 	// get the value the operator instructed to use as the host name in the CRUSH map
 	hostNameLabel := os.Getenv("ROOK_CRUSHMAP_HOSTNAME")
 
 	rootLabel := os.Getenv(oposd.CrushRootVarName)
 
-	loc, topologyAffinity, err := oposd.GetLocationWithNode(clientset, os.Getenv(k8sutil.NodeNameEnvVar), rootLabel, hostNameLabel)
+	loc, topologyAffinity, err := oposd.GetLocationWithNode(ctx, clientset, os.Getenv(k8sutil.NodeNameEnvVar), rootLabel, hostNameLabel)
 	if err != nil {
 		return "", "", err
 	}

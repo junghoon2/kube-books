@@ -32,7 +32,7 @@ metadata:
 spec:
   cephVersion:
     # see the "Cluster Settings" section below for more details on which image of ceph to run
-    image: quay.io/ceph/ceph:v16.2.6
+    image: quay.io/ceph/ceph:v16.2.7
   dataDirHostPath: /var/lib/rook
   mon:
     count: 3
@@ -49,8 +49,6 @@ In a "PVC-based cluster", the Ceph persistent data is stored on volumes requeste
 This type of cluster is recommended in a cloud environment where volumes can be dynamically created and also
 in clusters where a local PV provisioner is available.
 
-> **NOTE**: Kubernetes version 1.13.0 or greater is required to provision OSDs on PVCs.
-
 ```yaml
 apiVersion: ceph.rook.io/v1
 kind: CephCluster
@@ -60,7 +58,7 @@ metadata:
 spec:
   cephVersion:
     # see the "Cluster Settings" section below for more details on which image of ceph to run
-    image: quay.io/ceph/ceph:v16.2.6
+    image: quay.io/ceph/ceph:v16.2.7
   dataDirHostPath: /var/lib/rook
   mon:
     count: 3
@@ -129,7 +127,7 @@ spec:
       - name: c
   cephVersion:
     # Stretch cluster is supported in Ceph Pacific or newer.
-    image: quay.io/ceph/ceph:v16.2.6
+    image: quay.io/ceph/ceph:v16.2.7
     allowUnsupported: true
   # Either storageClassDeviceSets or the storage section can be specified for creating OSDs.
   # This example uses all devices for simplicity.
@@ -167,12 +165,12 @@ Settings can be specified at the global level to apply to the cluster as a whole
 * `external`:
   * `enable`: if `true`, the cluster will not be managed by Rook but via an external entity. This mode is intended to connect to an existing cluster. In this case, Rook will only consume the external cluster. However, Rook will be able to deploy various daemons in Kubernetes such as object gateways, mds and nfs if an image is provided and will refuse otherwise. If this setting is enabled **all** the other options will be ignored except `cephVersion.image` and `dataDirHostPath`. See [external cluster configuration](#external-cluster). If `cephVersion.image` is left blank, Rook will refuse the creation of extra CRs like object, file and nfs.
 * `cephVersion`: The version information for launching the ceph daemons.
-  * `image`: The image used for running the ceph daemons. For example, `quay.io/ceph/ceph:v15.2.12` or `v16.2.6`. For more details read the [container images section](#ceph-container-images).
+  * `image`: The image used for running the ceph daemons. For example, `quay.io/ceph/ceph:v15.2.12` or `v16.2.7`. For more details read the [container images section](#ceph-container-images).
   For the latest ceph images, see the [Ceph DockerHub](https://hub.docker.com/r/ceph/ceph/tags/).
   To ensure a consistent version of the image is running across all nodes in the cluster, it is recommended to use a very specific image version.
-  Tags also exist that would give the latest version, but they are only recommended for test environments. For example, the tag `v14` will be updated each time a new nautilus build is released.
-  Using the `v14` or similar tag is not recommended in production because it may lead to inconsistent versions of the image running across different nodes in the cluster.
-  * `allowUnsupported`: If `true`, allow an unsupported major version of the Ceph release. Currently `nautilus`, `octopus`, and `pacific` are supported. Future versions such as `quincy` would require this to be set to `true`. Should be set to `false` in production.
+  Tags also exist that would give the latest version, but they are only recommended for test environments. For example, the tag `v15` will be updated each time a new Octopus build is released.
+  Using the `v15` or similar tag is not recommended in production because it may lead to inconsistent versions of the image running across different nodes in the cluster.
+  * `allowUnsupported`: If `true`, allow an unsupported major version of the Ceph release. Currently `octopus` and `pacific` are supported. Future versions such as `quincy` would require this to be set to `true`. Should be set to `false` in production.
 * `dataDirHostPath`: The path on the host ([hostPath](https://kubernetes.io/docs/concepts/storage/volumes/#hostpath)) where config and data should be stored for each of the services. If the directory does not exist, it will be created. Because this directory persists on the host, it will remain after pods are deleted. Following paths and any of their subpaths **must not be used**: `/etc/ceph`, `/rook` or `/var/log/ceph`.
   * On **Minikube** environments, use `/data/rook`. Minikube boots into a tmpfs but it provides some [directories](https://github.com/kubernetes/minikube/blob/master/site/content/en/docs/handbook/persistent_volumes.md#a-note-on-mounts-persistence-and-minikube-hosts) where files can be persisted across reboots. Using one of these directories will ensure that Rook's data and configuration files are persisted and that enough storage space is available.
   * **WARNING**: For test scenarios, if you delete a cluster and start a new cluster on the same hosts, the path used by `dataDirHostPath` must be deleted. Otherwise, stale keys and other config will remain from the previous cluster and the new mons will fail to start.
@@ -196,7 +194,10 @@ If this value is empty, each pod will get an ephemeral directory to store their 
 * `mon`: contains mon related options [mon settings](#mon-settings)
 For more details on the mons and when to choose a number other than `3`, see the [mon health doc](ceph-mon-health.md).
 * `mgr`: manager top level section
-  * `count`: set number of ceph managers between `1` to `2`. The default value is 1. This is only needed if plural ceph managers are needed.
+  * `count`: set number of ceph managers between `1` to `2`. The default value is 2.
+    If there are two managers, it is important for all mgr services point to the active mgr and not the passive mgr. Therefore, Rook will
+    automatically update all services (in the cluster namespace) that have a label `app=rook-ceph-mgr` with a selector pointing to the
+    active mgr. This commonly applies to services for the dashboard or the prometheus metrics collector.
   * `modules`: is the list of Ceph manager modules to enable
 * `crashCollector`: The settings for crash collector daemon(s).
   * `disable`: is set to `true`, the crash collector will not run on any node where a Ceph daemon runs
@@ -208,7 +209,7 @@ For more details on the mons and when to choose a number other than `3`, see the
 * `labels`: [labels configuration settings](#annotations-and-labels)
 * `placement`: [placement configuration settings](#placement-configuration-settings)
 * `resources`: [resources configuration settings](#cluster-wide-resources-configuration-settings)
-* `priorityClassNames`: [priority class names configuration settings](#priority-class-names-configuration-settings)
+* `priorityClassNames`: [priority class names configuration settings](#priority-class-names)
 * `storage`: Storage selection and configuration that will be used across the cluster.  Note that these settings can be overridden for specific nodes.
   * `useAllNodes`: `true` or `false`, indicating if all nodes in the cluster should be used for storage according to the cluster level storage selection and configuration values.
   If individual nodes are specified under the `nodes` field, then `useAllNodes` must be set to `false`.
@@ -220,14 +221,15 @@ For more details on the mons and when to choose a number other than `3`, see the
   * [Storage Class Device Sets](#storage-class-device-sets)
   * `onlyApplyOSDPlacement`: Whether the placement specific for OSDs is merged with the `all` placement. If `false`, the OSD placement will be merged with the `all` placement. If true, the `OSD placement will be applied` and the `all` placement will be ignored. The placement for OSDs is computed from several different places depending on the type of OSD:
     - For non-PVCs: `placement.all` and `placement.osd`
-    - For PVCs: `placement.all` and inside the storageClassDeviceSet from the `placement` or `preparePlacement`
+    - For PVCs: `placement.all` and inside the storageClassDeviceSets from the `placement` or `preparePlacement`
+* `disruptionManagement`: The section for configuring management of daemon disruptions
   * `managePodBudgets`: if `true`, the operator will create and manage PodDisruptionBudgets for OSD, Mon, RGW, and MDS daemons. OSD PDBs are managed dynamically via the strategy outlined in the [design](https://github.com/rook/rook/blob/master/design/ceph/ceph-managed-disruptionbudgets.md). The operator will block eviction of OSDs by default and unblock them safely when drains are detected.
   * `osdMaintenanceTimeout`: is a duration in minutes that determines how long an entire failureDomain like `region/zone/host` will be held in `noout` (in addition to the default DOWN/OUT interval) when it is draining. This is only relevant when  `managePodBudgets` is `true`. The default value is `30` minutes.
   * `manageMachineDisruptionBudgets`: if `true`, the operator will create and manage MachineDisruptionBudgets to ensure OSDs are only fenced when the cluster is healthy. Only available on OpenShift.
   * `machineDisruptionBudgetNamespace`: the namespace in which to watch the MachineDisruptionBudgets.
 * `removeOSDsIfOutAndSafeToRemove`: If `true` the operator will remove the OSDs that are down and whose data has been restored to other OSDs. In Ceph terms, the OSDs are `out` and `safe-to-destroy` when they are removed.
 * `cleanupPolicy`: [cleanup policy settings](#cleanup-policy)
-* `security`: [security settings](#security)
+* `security`: [security page for key management configuration](ceph-kms.md)
 
 ### Ceph container images
 
@@ -238,10 +240,10 @@ These are general purpose Ceph container with all necessary daemons and dependen
 
 | TAG                  | MEANING                                                   |
 | -------------------- | --------------------------------------------------------- |
-| vRELNUM              | Latest release in this series (e.g., *v14* = Nautilus)    |
-| vRELNUM.Y            | Latest stable release in this stable series (e.g., v14.2) |
-| vRELNUM.Y.Z          | A specific release (e.g., v14.2.5)                        |
-| vRELNUM.Y.Z-YYYYMMDD | A specific build (e.g., v14.2.5-20191203)                 |
+| vRELNUM              | Latest release in this series (e.g., *v15* = Octopus)     |
+| vRELNUM.Y            | Latest stable release in this stable series (e.g., v15.2) |
+| vRELNUM.Y.Z          | A specific release (e.g., v15.2.5)                        |
+| vRELNUM.Y.Z-YYYYMMDD | A specific build (e.g., v15.2.11-20200419)                |
 
 A specific will contain a specific release of Ceph as well as security fixes from the Operating System.
 
@@ -301,6 +303,19 @@ Configure the network that will be enabled for the cluster and services.
 * `selectors`: List the network selector(s) that will be used associated by a key.
 * `ipFamily`: Specifies the network stack Ceph daemons should listen on.
 * `dualStack`: Specifies that Ceph daemon should listen on both IPv4 and IPv6 network stacks.
+* `connections`: Settings for network connections using Ceph's msgr2 protocol
+  * `encryption`: Settings for encryption on the wire to Ceph daemons
+    * `enabled`: Whether to encrypt the data in transit across the wire to prevent eavesdropping the data on the network.
+      The default is false. When encryption is enabled, all communication between clients and Ceph daemons, or between
+      Ceph daemons will be encrypted. When encryption is not enabled, clients still establish a strong initial authentication
+      and data integrity is still validated with a crc check.
+      IMPORTANT: Encryption requires the 5.11 kernel for the latest nbd and cephfs drivers. Alternatively for testing only,
+      set "mounter: rbd-nbd" in the rbd storage class, or "mounter: fuse" in the cephfs storage class.
+      The nbd and fuse drivers are *not* recommended in production since restarting the csi driver pod will disconnect the volumes.
+  * `compression`:
+    * `enabled`: Whether to compress the data in transit across the wire. The default is false.
+      Requires Ceph Quincy (v17) or newer. Also see the kernel requirements above for encryption.
+
 
 > **NOTE:** Changing networking configuration after a Ceph cluster has been deployed is NOT
 > supported and will result in a non-functioning cluster.
@@ -391,7 +406,16 @@ spec:
   * This format is required in order to use the NetworkAttachmentDefinition across namespaces.
   * In Openshift, to use a NetworkAttachmentDefinition (NAD) across namespaces, the NAD must be deployed in the `default` namespace. The NAD is then referenced with the namespace: `default/rook-public-nw`
 
-#### Known issues with multus
+#### Known limitations with Multus
+
+Daemons leveraging Kubernetes service IPs (Monitors, Managers, Rados Gateways) are not listening on the NAD specified in the `selectors`.
+Instead the daemon listens on the default network, however the NAD is attached to the container,
+allowing the daemon to communicate with the rest of the cluster. There is work in progress to fix
+this issue in the [multus-service](https://github.com/k8snetworkplumbingwg/multus-service)
+repository. At the time of writing it's unclear when this will be supported.
+
+#### Known issues with Multus
+
 When a CephFS/RBD volume is mounted in a Pod using cephcsi and then the CSI CephFS/RBD plugin is restarted or terminated (e.g. by restarting or deleting its DaemonSet), all operations on the volume become blocked, even after restarting the CSI pods. The only workaround is to restart the node where the cephcsi plugin pod was restarted.
 This issue is tracked [here](https://github.com/rook/rook/issues/8085).
 
@@ -512,11 +536,15 @@ Annotations and Labels can be specified so that the Rook components will have th
 
 You can set annotations / labels for Rook components for the list of key value pairs:
 
-* `all`: Set annotations / labels for all components
+* `all`: Set annotations / labels for all components except `clusterMetadata`.
 * `mgr`: Set annotations / labels for MGRs
 * `mon`: Set annotations / labels for mons
 * `osd`: Set annotations / labels for OSDs
 * `prepareosd`: Set annotations / labels for OSD Prepare Jobs
+* `monitoring`: Set annotations / labels for service monitor
+* `crashcollector`: Set annotations / labels for crash collectors
+* `clusterMetadata`: Set annotations  only to `rook-ceph-mon-endpoints` configmap and the  `rook-ceph-mon` and `rook-ceph-admin-keyring` secrets. These annotations will not be merged with the `all` annotations. The common usage is for backing up these critical resources with `kubed`.
+Note the clusterMetadata annotation will not be merged with the `all` annotation.
 When other keys are set, `all` will be merged together with the specific component.
 
 ### Placement Configuration Settings
@@ -539,7 +567,7 @@ A Placement configuration is specified (according to the kubernetes PodSpec) as:
 * `tolerations`: list of kubernetes [Toleration](https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/)
 * `topologySpreadConstraints`: kubernetes [TopologySpreadConstraints](https://kubernetes.io/docs/concepts/workloads/pods/pod-topology-spread-constraints/)
 
-If you use `labelSelector` for `osd` pods, you must write two rules both for `rook-ceph-osd` and `rook-ceph-osd-prepare` like [the example configuration](https://github.com/rook/rook/blob/master/cluster/examples/kubernetes/ceph/cluster-on-pvc.yaml#L68). It comes from the design that there are these two pods for an OSD. For more detail, see the [osd design doc](https://github.com/rook/rook/blob/master/design/ceph/dedicated-osd-pod.md) and [the related issue](https://github.com/rook/rook/issues/4582).
+If you use `labelSelector` for `osd` pods, you must write two rules both for `rook-ceph-osd` and `rook-ceph-osd-prepare` like [the example configuration](https://github.com/rook/rook/blob/master/deploy/examples/cluster-on-pvc.yaml#L68). It comes from the design that there are these two pods for an OSD. For more detail, see the [osd design doc](https://github.com/rook/rook/blob/master/design/ceph/dedicated-osd-pod.md) and [the related issue](https://github.com/rook/rook/issues/4582).
 
 The Rook Ceph operator creates a Job called `rook-ceph-detect-version` to detect the full Ceph version used by the given `cephVersion.image`. The placement from the `mon` section is used for the Job except for the `PodAntiAffinity` field.
 
@@ -589,16 +617,17 @@ For more information on resource requests/limits see the official Kubernetes doc
   * `cpu`: Limit for CPU (example: one CPU core `1`, 50% of one CPU core `500m`).
   * `memory`: Limit for Memory (example: one gigabyte of memory `1Gi`, half a gigabyte of memory `512Mi`).
 
-### Priority Class Names Configuration Settings
+### Priority Class Names
 
 Priority class names can be specified so that the Rook components will have those priority class names added to them.
 
 You can set priority class names for Rook components for the list of key value pairs:
 
-* `all`: Set priority class names for MGRs, Mons, OSDs.
-* `mgr`: Set priority class names for MGRs.
-* `mon`: Set priority class names for Mons.
-* `osd`: Set priority class names for OSDs.
+* `all`: Set priority class names for MGRs, Mons, OSDs, and crashcollectors.
+* `mgr`: Set priority class names for MGRs. Examples default to system-cluster-critical.
+* `mon`: Set priority class names for Mons. Examples default to system-node-critical.
+* `osd`: Set priority class names for OSDs. Examples default to system-node-critical.
+* `crashcollector`: Set priority class names for crashcollectors.
 
 The specific component keys will act as overrides to `all`.
 
@@ -615,8 +644,9 @@ Currently three health checks are implemented:
 * `osd`: health check on the ceph osds
 * `status`: ceph health status check, periodically check the Ceph health state and reflects it in the CephCluster CR status field.
 
-The liveness probe of each daemon can also be controlled via `livenessProbe`, the setting is valid for `mon`, `mgr` and `osd`.
-Here is a complete example for both `daemonHealth` and `livenessProbe`:
+The liveness probe and startup probe of each daemon can also be controlled via `livenessProbe` and
+`startupProbe` respectively. The settings are valid for `mon`, `mgr` and `osd`.
+Here is a complete example for both `daemonHealth`, `livenessProbe`, and `startupProbe`:
 
 ```yaml
 healthCheck:
@@ -637,21 +667,34 @@ healthCheck:
       disabled: false
     osd:
       disabled: false
+  startupProbe:
+    mon:
+      disabled: false
+    mgr:
+      disabled: false
+    osd:
+      disabled: false
 ```
 
-The probe itself can also be overridden, refer to the [Kubernetes documentation](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/#define-a-liveness-command).
+The probe's timing values and thresholds (but not the probe itself) can also be overridden.
+For more info, refer to the
+[Kubernetes documentation](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/#define-a-liveness-command).
 
 For example, you could change the `mgr` probe by applying:
 
 ```yaml
 healthCheck:
+  startupProbe:
+    mgr:
+      disabled: false
+      probe:
+        initialDelaySeconds: 3
+        periodSeconds: 3
+        failureThreshold: 30
   livenessProbe:
     mgr:
       disabled: false
       probe:
-        httpGet:
-          path: /
-          port: 9283
         initialDelaySeconds: 3
         periodSeconds: 3
 ```
@@ -685,7 +728,7 @@ kubectl -n rook-ceph get CephCluster -o yaml
       deviceClasses:
       - name: hdd
     version:
-      image: quay.io/ceph/ceph:v16.2.6
+      image: quay.io/ceph/ceph:v16.2.7
       version: 16.2.6-0
     conditions:
     - lastHeartbeatTime: "2021-03-02T21:22:11Z"
@@ -747,7 +790,7 @@ metadata:
   namespace: rook-ceph
 spec:
   cephVersion:
-    image: quay.io/ceph/ceph:v16.2.6
+    image: quay.io/ceph/ceph:v16.2.7
   dataDirHostPath: /var/lib/rook
   mon:
     count: 3
@@ -779,7 +822,7 @@ metadata:
   namespace: rook-ceph
 spec:
   cephVersion:
-    image: quay.io/ceph/ceph:v16.2.6
+    image: quay.io/ceph/ceph:v16.2.7
   dataDirHostPath: /var/lib/rook
   mon:
     count: 3
@@ -819,7 +862,7 @@ metadata:
   namespace: rook-ceph
 spec:
   cephVersion:
-    image: quay.io/ceph/ceph:v16.2.6
+    image: quay.io/ceph/ceph:v16.2.7
   dataDirHostPath: /var/lib/rook
   mon:
     count: 3
@@ -866,7 +909,7 @@ metadata:
   namespace: rook-ceph
 spec:
   cephVersion:
-    image: quay.io/ceph/ceph:v16.2.6
+    image: quay.io/ceph/ceph:v16.2.7
   dataDirHostPath: /var/lib/rook
   mon:
     count: 3
@@ -915,8 +958,6 @@ For example, if the following labels were added to a node:
 kubectl label node mynode topology.kubernetes.io/zone=zone1
 kubectl label node mynode topology.rook.io/rack=zone1-rack1
 ```
-
-> For versions previous to K8s 1.17, use the topology key: failure-domain.beta.kubernetes.io/zone or region
 
 These labels would result in the following hierarchy for OSDs on that node (this command can be run in the Rook toolbox):
 
@@ -972,7 +1013,7 @@ metadata:
   namespace: rook-ceph
 spec:
   cephVersion:
-    image: quay.io/ceph/ceph:v16.2.6
+    image: quay.io/ceph/ceph:v16.2.7
   dataDirHostPath: /var/lib/rook
   mon:
     count: 3
@@ -1018,7 +1059,7 @@ spec:
           requests:
             storage: 10Gi
   cephVersion:
-    image: quay.io/ceph/ceph:v16.2.6
+    image: quay.io/ceph/ceph:v16.2.7
     allowUnsupported: false
   dashboard:
     enabled: true
@@ -1260,7 +1301,7 @@ To determine the size of the metadata block follow the [official Ceph sizing gui
 
 With the present configuration, each OSD will have its main block allocated a 10GB device as well a 5GB device to act as a bluestore database.
 
-### External cluster
+## External cluster
 
 **The minimum supported Ceph version for the External Cluster is Luminous 12.2.x.**
 
@@ -1274,144 +1315,72 @@ The features available from the external cluster will vary depending on the vers
 
 [^1]: Configure an object store, shared filesystem, or NFS resources in the local cluster to connect to the external Ceph cluster
 
-#### Pre-requisites
+### External Cluster configuration
 
-In order to configure an external Ceph cluster with Rook, we need to inject some information in order to connect to that cluster.
-You can use the `cluster/examples/kubernetes/ceph/import-external-cluster.sh` script to achieve that.
-The script will look for the following populated environment variables:
+- Source cluster: The cluster providing the data, usually configured by [cephadm](https://docs.ceph.com/en/pacific/cephadm/#cephadm)
 
-* `NAMESPACE`: the namespace where the configmap and secrets should be injected
-* `ROOK_EXTERNAL_FSID`: the fsid of the external Ceph cluster, it can be retrieved via the `ceph fsid` command
-* `ROOK_EXTERNAL_CEPH_MON_DATA`: is a common-separated list of running monitors IP address along with their ports, e.g: `a=172.17.0.4:3300,b=172.17.0.5:3300,c=172.17.0.6:3300`. You don't need to specify all the monitors, you can simply pass one and the Operator will discover the rest. The name of the monitor is the name that appears in the `ceph status` output.
+- Consumer cluster: The K8s cluster that will be consuming the external source cluster
 
-Now, we need to give Rook a key to connect to the cluster in order to perform various operations such as health cluster check, CSI keys management etc...
-It is recommended to generate keys with minimal access so the admin key does not need to be used by the external cluster.
-In this case, the admin key is only needed to generate the keys that will be used by the external cluster.
-But if the admin key is to be used by the external cluster, set the following variable:
+### Commands on the source Ceph cluster
 
-* `ROOK_EXTERNAL_ADMIN_SECRET`: **OPTIONAL:** the external Ceph cluster admin secret key, it can be retrieved via the `ceph auth get-key client.admin` command.
+In order to configure an external Ceph cluster with Rook, we need to extract some information in order to connect to that cluster.
 
-> **WARNING**: If you plan to create CRs (pool, rgw, mds, nfs) in the external cluster, you **MUST** inject the client.admin keyring as well as injecting `cluster-external-management.yaml`
-
-**Example**:
+1. Run the python script [create-external-cluster-resources.py](/deploy/examples/create-external-cluster-resources.py) for creating all users and keys.
 
 ```console
-export NAMESPACE=rook-ceph-external
-export ROOK_EXTERNAL_FSID=3240b4aa-ddbc-42ee-98ba-4ea7b2a61514
-export ROOK_EXTERNAL_CEPH_MON_DATA=a=172.17.0.4:3300
-export ROOK_EXTERNAL_ADMIN_SECRET=AQC6Ylxdja+NDBAAB7qy9MEAr4VLLq4dCIvxtg==
+python3 create-external-cluster-resources.py --rbd-data-pool-name <pool_name> --cephfs-filesystem-name <filesystem-name> --rgw-endpoint  <rgw-endpoint> --namespace <namespace> --rgw-pool-prefix <rgw-pool-prefix> --format bash
 ```
 
-If the Ceph admin key is not provided, the following script needs to be executed on a machine that can connect to the Ceph cluster using the Ceph admin key.
-On that machine, run:
+- `--namespace`: Namespace where CephCluster will run in the consumer cluster, for example `rook-ceph-external`
+- `--format bash`: The format of the output
+- `--rbd-data-pool-name`: The name of the RBD data pool
+- `--cephfs-filesystem-name`: (optional) The name of the filesystem
+- `--rgw-endpoint`: (optional) The RADOS Gateway endpoint in the format `<IP>:<PORT>`
+- `--rgw-pool-prefix`: (optional) The prefix of the RGW pools. If not specified, the default prefix is `default`.
 
-```sh
-. cluster/examples/kubernetes/ceph/create-external-cluster-resources.sh
-```
+2. Copy the bash output.
 
-The script will source all the necessary environment variables for you. It assumes the namespace name is `rook-ceph-external`.
-This can be changed by running the script like (assuming namespace name is `foo` this time):
-
-```sh
-ns=foo . cluster/examples/kubernetes/ceph/create-external-cluster-resources.sh
-```
-
-When done you can execute: `import-external-cluster.sh` to inject them in your Kubernetes cluster.
-
-> **WARNING**: Since only Ceph admin key can create CRs in the external cluster, please make sure that rgw pools have been prepared. You can get existing pools by running `ceph osd pool ls`.
-
-**Example**:
-
+Example Output:
 ```console
-ceph osd pool ls
+export ROOK_EXTERNAL_FSID=797f411a-aafe-11ec-a254-fa163e1539f5
+export ROOK_EXTERNAL_USERNAME=client.healthchecker
+export ROOK_EXTERNAL_CEPH_MON_DATA=ceph-rados-upstream-w4pdvq-node1-installer=10.0.210.83:6789
+export ROOK_EXTERNAL_USER_SECRET=AQAdm0FilZDSJxAAMucfuu/j0ZYYP4Bia8Us+w==
+export ROOK_EXTERNAL_DASHBOARD_LINK=https://10.0.210.83:8443/
+export CSI_RBD_NODE_SECRET=AQC1iDxip45JDRAAVahaBhKz1z0WW98+ACLqMQ==
+export CSI_RBD_PROVISIONER_SECRET=AQC1iDxiMM+LLhAA0PucjNZI8sG9Eh+pcvnWhQ==
+export MONITORING_ENDPOINT=10.0.210.83
+export MONITORING_ENDPOINT_PORT=9283
+export RBD_POOL_NAME=replicated_2g
+export RGW_POOL_PREFIX=default
 ```
->```
->my-store.rgw.control
->my-store.rgw.meta
->my-store.rgw.log
->my-store.rgw.buckets.index
->my-store.rgw.buckets.non-ec
->my-store.rgw.buckets.data
->```
 
-In this example, you can simply export RGW_POOL_PREFIX before executing the script like this:
+### Commands on the K8s consumer cluster
 
+1. Deploy Rook-Ceph, create [common.yaml](/deploy/examples/common.yaml), [crds.yaml](/deploy/examples/crds.yaml) and [operator.yaml](/deploy/examples/operator.yaml) manifests.
+
+2. Paste the above output from `create-external-cluster-resources.py` into your current shell to allow importing the source data.
+
+3. Run the [import](/deploy/examples/import-external-cluster.sh) script.
 ```console
-export RGW_POOL_PREFIX=my-store
+. import-external-cluster.sh
 ```
 
-The script will automatically create users and keys with the lowest possible privileges and populate the necessary environment variables for `cluster/examples/kubernetes/ceph/import-external-cluster.sh` to work correctly.
+4. Create [common-external.yaml](/deploy/examples/common-external.yaml) and [cluster-external.yaml](/deploy/examples/cluster-external.yaml)
 
-Finally, you can simply execute the script like this from a machine that has access to your Kubernetes cluster:
-
+5. Verify the consumer cluster is connected to the source ceph cluster:
 ```console
-bash cluster/examples/kubernetes/ceph/import-external-cluster.sh
+kubectl -n rook-ceph-external  get CephCluster
 ```
-
-#### CephCluster example (consumer)
-
-Assuming the above section has successfully completed, here is a CR example:
-
-```yaml
-apiVersion: ceph.rook.io/v1
-kind: CephCluster
-metadata:
-  name: rook-ceph-external
-  namespace: rook-ceph-external
-spec:
-  external:
-    enable: true
-  crashCollector:
-    disable: true
-  # optionally, the ceph-mgr IP address can be pass to gather metric from the prometheus exporter
-  #monitoring:
-    #enabled: true
-    #rulesNamespace: rook-ceph
-    #externalMgrEndpoints:
-      #- ip: 192.168.39.182
-    #externalMgrPrometheusPort: 9283
-```
-
-Choose the namespace carefully, if you have an existing cluster managed by Rook, you have likely already injected `common.yaml`.
-Additionally, you now need to inject `common-external.yaml` too.
-
-You can now create it like this:
-
-```console
-kubectl create -f cluster/examples/kubernetes/ceph/cluster-external.yaml
-```
-
-If the previous section has not been completed, the Rook Operator will still acknowledge the CR creation but will wait forever to receive connection information.
-
-> **WARNING**: If no cluster is managed by the current Rook Operator, you need to inject `common.yaml`, then modify `cluster-external.yaml` and specify `rook-ceph` as `namespace`.
-
-If this is successful you will see the CepCluster status as connected.
-
-```console
-kubectl get CephCluster -n rook-ceph-external
-```
-
 >```
 >NAME                 DATADIRHOSTPATH   MONCOUNT   AGE    STATE       HEALTH
 >rook-ceph-external   /var/lib/rook                162m   Connected   HEALTH_OK
 >```
 
-Before you create a StorageClass with this cluster you will need to create a Pool in your external Ceph Cluster.
+### Create StorageClass
 
-#### Example StorageClass based on external Ceph Pool
-
-In Ceph Cluster let us list the pools available:
-
-```console
-rados df
-```
-
->```
->POOL_NAME     USED OBJECTS CLONES COPIES MISSING_ON_PRIMARY UNFOUND DEGRADED RD_OPS  RD WR_OPS  WR USED COMPR UNDER COMPR
->replicated_2g  0 B       0      0      0                  0       0        0      0 0 B      0 0 B        0 B         0 B
-> ```
-
-Here is an example StorageClass configuration that uses the `replicated_2g` pool from the external cluster:
+Create a StorageClass based on the pool that was already created in the source Ceph cluster.
+In this example, the pool `replicated_2g` exists in the source cluster.
 
 ```console
 cat << EOF | kubectl apply -f -
@@ -1457,11 +1426,11 @@ cat << EOF | kubectl apply -f -
 
 You can now create a persistent volume based on this StorageClass.
 
-#### CephCluster example (management)
+### CephCluster example (management)
 
 The following CephCluster CR represents a cluster that will perform management tasks on the external cluster.
 It will not only act as a consumer but will also allow the deployment of other CRDs such as CephFilesystem or CephObjectStore.
-As mentioned above, you would need to inject the admin keyring for that.
+You would need to inject the admin keyring for that.
 
 The corresponding YAML example:
 
@@ -1476,135 +1445,10 @@ spec:
     enable: true
   dataDirHostPath: /var/lib/rook
   cephVersion:
-    image: quay.io/ceph/ceph:v16.2.6 # Should match external cluster version
+    image: quay.io/ceph/ceph:v16.2.7 # Should match external cluster version
 ```
 
-### Security
-
-Rook has the ability to encrypt OSDs of clusters running on PVC via the flag (`encrypted: true`) in your `storageClassDeviceSets` [template](#pvc-based-cluster).
-By default, the Key Encryption Keys (also known as Data Encryption Keys) are stored in a Kubernetes Secret.
-
-However, if a Key Management System exists Rook is capable of using it. HashiCorp Vault is the only KMS currently supported by Rook.
-Please refer to the next section.
-
-The `security` section contains settings related to encryption of the cluster.
-
-* `security`:
-  * `kms`: Key Management System settings
-    * `connectionDetails`: the list of parameters representing kms connection details
-    * `tokenSecretName`: the name of the Kubernetes Secret containing the kms authentication token
-
-#### Vault KMS
-
-In order for Rook to connect to Vault, you must configure the following in your `CephCluster` template:
-
-```yaml
-security:
-  kms:
-    # name of the k8s config map containing all the kms connection details
-    connectionDetails:
-      KMS_PROVIDER: vault
-      VAULT_ADDR: https://vault.default.svc.cluster.local:8200
-      VAULT_BACKEND_PATH: rook
-      VAULT_SECRET_ENGINE: kv
-    # name of the k8s secret containing the kms authentication token
-    tokenSecretName: rook-vault-token
-```
-
-Note: Rook supports **all** the Vault [environment variables](https://www.vaultproject.io/docs/commands#environment-variables).
-
-The Kubernetes Secret `rook-vault-token` should contain:
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: rook-vault-token
-  namespace: rook-ceph
-data:
-  token: <TOKEN> # base64 of a token to connect to Vault, for example: cy5GWXpsbzAyY2duVGVoRjhkWG5Bb3EyWjkK
-```
-
-As part of the token, here is an example of a policy that can be used:
-
-```hcl
-path "rook/*" {
-  capabilities = ["create", "read", "update", "delete", "list"]
-}
-path "sys/mounts" {
-capabilities = ["read"]
-}
-```
-
-You can write the policy like so and then create a token:
-
-```console
-vault policy write rook /tmp/rook.hcl
-vault token create -policy=rook
-```
->```
->Key                  Value
->---                  -----
->token                s.FYzlo02cgnTehF8dXnAoq2Z9
->token_accessor       oMo7sAXQKbYtxU4HtO8k3pko
->token_duration       768h
->token_renewable      true
->token_policies       ["default" "rook"]
->identity_policies    []
->policies             ["default" "rook"]
->```
-
-In this example the backend path named `rook` is used it must be enabled in Vault with the following:
-
-```console
-vault secrets enable -path=rook kv
-```
-
-If a different path is used, the `VAULT_BACKEND_PATH` key in `connectionDetails` must be changed.
-
-Currently the token-based authentication is the only supported method.
-Later Rook is planning on supporting the [Vault Kubernetes native authentication](https://www.vaultproject.io/docs/auth/kubernetes).
-
-##### TLS configuration
-
-This is an advanced but recommended configuration for production deployments, in this case the `vault-connection-details` will look like:
-
-```yaml
-security:
-  kms:
-    # name of the k8s config map containing all the kms connection details
-    connectionDetails:
-      KMS_PROVIDER: vault
-      VAULT_ADDR: https://vault.default.svc.cluster.local:8200
-      VAULT_CACERT: <name of the k8s secret containing the PEM-encoded CA certificate>
-      VAULT_CLIENT_CERT: <name of the k8s secret containing the PEM-encoded client certificate>
-      VAULT_CLIENT_KEY: <name of the k8s secret containing the PEM-encoded private key>
-    # name of the k8s secret containing the kms authentication token
-    tokenSecretName: rook-vault-token
-```
-
-Each secret keys are expected to be:
-
-* VAULT_CACERT: `cert`
-* VAULT_CLIENT_CERT: `cert`
-* VAULT_CLIENT_KEY: `key`
-
-For instance `VAULT_CACERT` Secret named `vault-tls-ca-certificate` will look like:
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: vault-tls-ca-certificate
-  namespace: rook-ceph
-data:
-  cert: <PEM base64 encoded CA certificate>
-```
-
-Note: if you are using self-signed certificates (not known/approved by a proper CA) you must pass `VAULT_SKIP_VERIFY: true`.
-Communications will remain encrypted but the validity of the certificate will not be verified.
-
-### Deleting a CephCluster
+## Deleting a CephCluster
 
 During deletion of a CephCluster resource, Rook protects against accidental or premature destruction
 of user data by blocking deletion if there are any other Rook-Ceph Custom Resources that reference
@@ -1614,7 +1458,7 @@ three ways until all blocking resources are deleted:
 1. A status condition will be added to the CephCluster resource
 1. An error will be added to the Rook-Ceph Operator log
 
-#### Cleanup policy
+### Cleanup policy
 
 Rook has the ability to cleanup resources and data that were deployed when a CephCluster is removed.
 The policy settings indicate which data should be forcibly deleted and in what way the data should be wiped.

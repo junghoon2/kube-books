@@ -22,7 +22,6 @@ import (
 	"fmt"
 
 	v1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
-	v1alpha2 "github.com/rook/rook/pkg/apis/rook.io/v1alpha2"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	cache "k8s.io/client-go/tools/cache"
 )
@@ -56,6 +55,12 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 	// Group=ceph.rook.io, Version=v1
 	case v1.SchemeGroupVersion.WithResource("cephblockpools"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Ceph().V1().CephBlockPools().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("cephblockpoolradosnamespaces"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Ceph().V1().CephBlockPoolRadosNamespaces().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("cephbucketnotifications"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Ceph().V1().CephBucketNotifications().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("cephbuckettopics"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Ceph().V1().CephBucketTopics().Informer()}, nil
 	case v1.SchemeGroupVersion.WithResource("cephclients"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Ceph().V1().CephClients().Informer()}, nil
 	case v1.SchemeGroupVersion.WithResource("cephclusters"):
@@ -64,6 +69,8 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Ceph().V1().CephFilesystems().Informer()}, nil
 	case v1.SchemeGroupVersion.WithResource("cephfilesystemmirrors"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Ceph().V1().CephFilesystemMirrors().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("cephfilesystemsubvolumegroups"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Ceph().V1().CephFilesystemSubVolumeGroups().Informer()}, nil
 	case v1.SchemeGroupVersion.WithResource("cephnfses"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Ceph().V1().CephNFSes().Informer()}, nil
 	case v1.SchemeGroupVersion.WithResource("cephobjectrealms"):
@@ -78,10 +85,6 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Ceph().V1().CephObjectZoneGroups().Informer()}, nil
 	case v1.SchemeGroupVersion.WithResource("cephrbdmirrors"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Ceph().V1().CephRBDMirrors().Informer()}, nil
-
-		// Group=rook.io, Version=v1alpha2
-	case v1alpha2.SchemeGroupVersion.WithResource("volumes"):
-		return &genericInformer{resource: resource.GroupResource(), informer: f.Rook().V1alpha2().Volumes().Informer()}, nil
 
 	}
 

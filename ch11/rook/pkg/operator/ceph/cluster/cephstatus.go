@@ -84,24 +84,31 @@ func newCephStatusChecker(context *clusterd.Context, clusterInfo *cephclient.Clu
 }
 
 // checkCephStatus periodically checks the health of the cluster
-func (c *cephStatusChecker) checkCephStatus(stopCh chan struct{}) {
+func (c *cephStatusChecker) checkCephStatus(monitoringRoutines map[string]*opcontroller.ClusterHealth, daemon string) {
 	// check the status immediately before starting the loop
-	c.checkStatus()
+	c.checkStatus(monitoringRoutines[daemon].InternalCtx)
 
 	for {
+		// We must perform this check otherwise the case will check an index that does not exist anymore and
+		// we will get an invalid pointer error and the go routine will panic
+		if _, ok := monitoringRoutines[daemon]; !ok {
+			logger.Infof("ceph cluster %q has been deleted. stopping ceph status check", c.clusterInfo.Namespace)
+			return
+		}
 		select {
-		case <-stopCh:
+		case <-monitoringRoutines[daemon].InternalCtx.Done():
 			logger.Infof("stopping monitoring of ceph status")
+			delete(monitoringRoutines, daemon)
 			return
 
 		case <-time.After(*c.interval):
-			c.checkStatus()
+			c.checkStatus(monitoringRoutines[daemon].InternalCtx)
 		}
 	}
 }
 
 // checkStatus queries the status of ceph health then updates the CR status
-func (c *cephStatusChecker) checkStatus() {
+func (c *cephStatusChecker) checkStatus(ctx context.Context) {
 	var status cephclient.CephStatus
 	var err error
 
@@ -141,7 +148,7 @@ func (c *cephStatusChecker) checkStatus() {
 
 	if status.Health.Status != "HEALTH_OK" {
 		logger.Debug("checking for stuck pods on not ready nodes")
-		if err := c.forceDeleteStuckRookPodsOnNotReadyNodes(); err != nil {
+		if err := c.forceDeleteStuckRookPodsOnNotReadyNodes(ctx); err != nil {
 			logger.Errorf("failed to delete pod on not ready nodes. %v", err)
 		}
 	}
@@ -174,7 +181,7 @@ func (c *cephStatusChecker) configureHealthSettings(status cephclient.CephStatus
 // updateStatus updates an object with a given status
 func (c *cephStatusChecker) updateCephStatus(status *cephclient.CephStatus, condition cephv1.ConditionType, reason cephv1.ConditionReason, message string, conditionStatus v1.ConditionStatus) {
 	clusterName := c.clusterInfo.NamespacedName()
-	cephCluster, err := c.context.RookClientset.CephV1().CephClusters(clusterName.Namespace).Get(context.TODO(), clusterName.Name, metav1.GetOptions{})
+	cephCluster, err := c.context.RookClientset.CephV1().CephClusters(clusterName.Namespace).Get(c.clusterInfo.Context, clusterName.Name, metav1.GetOptions{})
 	if err != nil {
 		if kerrors.IsNotFound(err) {
 			logger.Debug("CephCluster resource not found. Ignoring since object must be deleted.")
@@ -198,7 +205,7 @@ func (c *cephStatusChecker) updateCephStatus(status *cephclient.CephStatus, cond
 
 	// Update condition
 	logger.Debugf("updating ceph cluster %q status and condition to %+v, %v, %s, %s", clusterName.Namespace, status, conditionStatus, reason, message)
-	opcontroller.UpdateClusterCondition(c.context, cephCluster, c.clusterInfo.NamespacedName(), condition, conditionStatus, reason, message, true)
+	opcontroller.UpdateClusterCondition(c.context, cephCluster, c.clusterInfo.NamespacedName(), k8sutil.ObservedGenerationNotAvailable, condition, conditionStatus, reason, message, true)
 }
 
 // toCustomResourceStatus converts the ceph status to the struct expected for the CephCluster CR status
@@ -233,6 +240,9 @@ func toCustomResourceStatus(currentStatus cephv1.ClusterStatus, newStatus *cephc
 			s.Capacity = currentStatus.CephStatus.Capacity
 		}
 	}
+	// update fsid on cephcluster Status
+	s.FSID = newStatus.FSID
+
 	return s
 }
 
@@ -241,10 +251,9 @@ func formatTime(t time.Time) string {
 }
 
 func (c *ClusterController) updateClusterCephVersion(image string, cephVersion cephver.CephVersion) {
-	ctx := context.TODO()
 	logger.Infof("cluster %q: version %q detected for image %q", c.namespacedName.Namespace, cephVersion.String(), image)
 
-	cephCluster, err := c.context.RookClientset.CephV1().CephClusters(c.namespacedName.Namespace).Get(ctx, c.namespacedName.Name, metav1.GetOptions{})
+	cephCluster, err := c.context.RookClientset.CephV1().CephClusters(c.namespacedName.Namespace).Get(c.OpManagerCtx, c.namespacedName.Name, metav1.GetOptions{})
 	if err != nil {
 		if kerrors.IsNotFound(err) {
 			logger.Debug("CephCluster resource not found. Ignoring since object must be deleted.")
@@ -286,8 +295,8 @@ func cephStatusOnError(errorMessage string) *cephclient.CephStatus {
 
 // forceDeleteStuckPodsOnNotReadyNodes lists all the nodes that are in NotReady state and
 // gets all the pods on the failed node and force delete the pods stuck in terminating state.
-func (c *cephStatusChecker) forceDeleteStuckRookPodsOnNotReadyNodes() error {
-	nodes, err := k8sutil.GetNotReadyKubernetesNodes(c.context.Clientset)
+func (c *cephStatusChecker) forceDeleteStuckRookPodsOnNotReadyNodes(ctx context.Context) error {
+	nodes, err := k8sutil.GetNotReadyKubernetesNodes(ctx, c.context.Clientset)
 	if err != nil {
 		return errors.Wrap(err, "failed to get NotReady nodes")
 	}
@@ -297,7 +306,7 @@ func (c *cephStatusChecker) forceDeleteStuckRookPodsOnNotReadyNodes() error {
 			logger.Errorf("failed to get pods on NotReady node %q. %v", node.Name, err)
 		}
 		for _, pod := range pods {
-			if err := k8sutil.ForceDeletePodIfStuck(c.context, pod); err != nil {
+			if err := k8sutil.ForceDeletePodIfStuck(ctx, c.context, pod); err != nil {
 				logger.Warningf("skipping forced delete of stuck pod %q. %v", pod.Name, err)
 			}
 		}
@@ -324,7 +333,7 @@ func (c *cephStatusChecker) getRookPodsOnNode(node string) ([]v1.Pod, error) {
 	listOpts := metav1.ListOptions{
 		FieldSelector: fmt.Sprintf("spec.nodeName=%s", node),
 	}
-	pods, err := c.context.Clientset.CoreV1().Pods(clusterName.Namespace).List(context.TODO(), listOpts)
+	pods, err := c.context.Clientset.CoreV1().Pods(clusterName.Namespace).List(c.clusterInfo.Context, listOpts)
 	if err != nil {
 		return podsOnNode, errors.Wrapf(err, "failed to get pods on node %q", node)
 	}

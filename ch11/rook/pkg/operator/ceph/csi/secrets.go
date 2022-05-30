@@ -26,7 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// #nosec because of the word `Secret`
+//nolint:gosec // because of the word `Secret`
 const (
 	csiKeyringRBDProvisionerUsername = "client.csi-rbd-provisioner"
 	csiKeyringRBDNodeUsername        = "client.csi-rbd-node"
@@ -34,7 +34,7 @@ const (
 	CsiRBDProvisionerSecret          = "rook-csi-rbd-provisioner"
 )
 
-// #nosec because of the word `Secret`
+//nolint:gosec // because of the word `Secret`
 const (
 	csiKeyringCephFSProvisionerUsername = "client.csi-cephfs-provisioner"
 	csiKeyringCephFSNodeUsername        = "client.csi-cephfs-node"
@@ -159,7 +159,7 @@ func createOrUpdateCSISecret(clusterInfo *client.ClusterInfo, csiRBDProvisionerS
 		// Create Kubernetes Secret
 		err = k.CreateSecret(s)
 		if err != nil {
-			return errors.Wrapf(err, "failed to create kubernetes secret %q for cluster %q", secret, clusterInfo.Namespace)
+			return errors.Wrapf(err, "failed to create kubernetes secret %q for cluster %q", s.Name, clusterInfo.Namespace)
 		}
 
 	}

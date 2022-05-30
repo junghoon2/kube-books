@@ -26,9 +26,7 @@ import (
 	opcontroller "github.com/rook/rook/pkg/operator/ceph/controller"
 	"github.com/rook/rook/pkg/operator/k8sutil"
 	v1 "k8s.io/api/core/v1"
-	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/apimachinery/pkg/util/version"
 )
 
 type createConfig struct {
@@ -134,17 +132,6 @@ func (c *Cluster) startProvisioningOverPVCs(config *provisionConfig, errs *provi
 		return sets.NewString(), nil
 	}
 
-	// Check k8s version
-	k8sVersion, err := k8sutil.GetK8SVersion(c.context.Clientset)
-	if err != nil {
-		errs.addError("failed to provision OSDs on PVCs. user has specified storageClassDeviceSets, but the Kubernetes version could not be determined. minimum Kubernetes version required: 1.13.0. %v", err)
-		return sets.NewString(), nil
-	}
-	if !k8sVersion.AtLeast(version.MustParseSemantic("v1.13.0")) {
-		errs.addError("failed to provision OSDs on PVCs. user has specified storageClassDeviceSets, but the Kubernetes version is not supported. user must update Kubernetes version. minimum Kubernetes version required: 1.13.0. version detected: %s", k8sVersion.String())
-		return sets.NewString(), nil
-	}
-
 	existingDeployments, err := c.getExistingOSDDeploymentsOnPVCs()
 	if err != nil {
 		errs.addError("failed to provision OSDs on PVCs. failed to query existing OSD deployments on PVCs. %v", err)
@@ -153,11 +140,9 @@ func (c *Cluster) startProvisioningOverPVCs(config *provisionConfig, errs *provi
 
 	awaitingStatusConfigMaps := sets.NewString()
 	for _, volume := range c.deviceSets {
-		// Check whether we need to cancel the orchestration
-		if err := opcontroller.CheckForCancelledOrchestration(c.context); err != nil {
-			return awaitingStatusConfigMaps, err
+		if c.clusterInfo.Context.Err() != nil {
+			return awaitingStatusConfigMaps, c.clusterInfo.Context.Err()
 		}
-
 		dataSource, dataOK := volume.PVCSources[bluestorePVCData]
 
 		// The data PVC template is required.
@@ -193,10 +178,17 @@ func (c *Cluster) startProvisioningOverPVCs(config *provisionConfig, errs *provi
 		}
 		osdProps.storeConfig.DeviceClass = volume.CrushDeviceClass
 
+		// Skip OSD prepare if deployment already exists for the PVC
+		// Also skip the encryption work part to avoid overriding the existing encryption key
+		if existingDeployments.Has(dataSource.ClaimName) {
+			logger.Infof("skipping OSD prepare job creation for PVC %q because OSD daemon using the PVC already exists", osdProps.crushHostname)
+			continue
+		}
+
 		if osdProps.encrypted {
 			// If the deviceSet template has "encrypted" but the Ceph version is not compatible
-			if !c.isCephVolumeRawModeSupported() {
-				errMsg := fmt.Sprintf("failed to validate storageClassDeviceSet %q. min required ceph version to support encryption is %q or %q", volume.Name, cephVolumeRawEncryptionModeMinNautilusCephVersion.String(), cephVolumeRawEncryptionModeMinOctopusCephVersion.String())
+			if !c.clusterInfo.CephVersion.IsAtLeast(cephVolumeRawEncryptionModeMinOctopusCephVersion) {
+				errMsg := fmt.Sprintf("failed to validate storageClassDeviceSet %q. min required ceph version to support encryption is %q", volume.Name, cephVolumeRawEncryptionModeMinOctopusCephVersion.String())
 				errs.addError(errMsg)
 				continue
 			}
@@ -214,8 +206,8 @@ func (c *Cluster) startProvisioningOverPVCs(config *provisionConfig, errs *provi
 
 			// We could set an env var in the Operator or a global var instead of the API call?
 			// Hopefully, the API is cheap and we can always retrieve the token if it has changed...
-			if c.spec.Security.KeyManagementService.IsTokenAuthEnabled() {
-				err := kms.SetTokenToEnvVar(c.context, c.spec.Security.KeyManagementService.TokenSecretName, kmsConfig.Provider, c.clusterInfo.Namespace)
+			if c.spec.Security.KeyManagementService.IsTokenAuthEnabled() && c.spec.Security.KeyManagementService.IsVaultKMS() {
+				err := kms.SetTokenToEnvVar(c.clusterInfo.Context, c.context, c.spec.Security.KeyManagementService.TokenSecretName, kmsConfig.Provider, c.clusterInfo.Namespace)
 				if err != nil {
 					errMsg := fmt.Sprintf("failed to fetch kms token secret %q. %v", c.spec.Security.KeyManagementService.TokenSecretName, err)
 					errs.addError(errMsg)
@@ -224,18 +216,14 @@ func (c *Cluster) startProvisioningOverPVCs(config *provisionConfig, errs *provi
 			}
 
 			// Generate and store the encrypted key in whatever KMS is configured
+			// The PutSecret() call for each backend verifies whether the key is present already so
+			// no risk of overwriting an existing key.
 			err = kmsConfig.PutSecret(osdProps.pvc.ClaimName, key)
 			if err != nil {
 				errMsg := fmt.Sprintf("failed to store secret. %v", err)
 				errs.addError(errMsg)
 				continue
 			}
-		}
-
-		// Skip OSD prepare if deployment already exists for the PVC
-		if existingDeployments.Has(dataSource.ClaimName) {
-			logger.Debugf("skipping OSD prepare job creation for PVC %q because OSD daemon using the PVC already exists", osdProps.crushHostname)
-			continue
 		}
 
 		// Update the orchestration status of this pvc to the starting state
@@ -275,7 +263,7 @@ func (c *Cluster) startProvisioningOverNodes(config *provisionConfig, errs *prov
 		}
 
 		// Get the list of all nodes in the cluster. The placement settings will be applied below.
-		hostnameMap, err := k8sutil.GetNodeHostNames(c.context.Clientset)
+		hostnameMap, err := k8sutil.GetNodeHostNames(c.clusterInfo.Context, c.context.Clientset)
 		if err != nil {
 			errs.addError("failed to provision OSDs on nodes. failed to get node hostnames. %v", err)
 			return sets.NewString(), nil
@@ -290,7 +278,7 @@ func (c *Cluster) startProvisioningOverNodes(config *provisionConfig, errs *prov
 		logger.Debugf("storage nodes: %+v", c.spec.Storage.Nodes)
 	}
 	// generally speaking, this finds nodes which are capable of running new osds
-	validNodes := k8sutil.GetValidNodes(c.spec.Storage, c.context.Clientset, cephv1.GetOSDPlacement(c.spec.Placement))
+	validNodes := k8sutil.GetValidNodes(c.clusterInfo.Context, c.spec.Storage, c.context.Clientset, cephv1.GetOSDPlacement(c.spec.Placement))
 
 	logger.Infof("%d of the %d storage nodes are valid", len(validNodes), len(c.spec.Storage.Nodes))
 
@@ -310,11 +298,9 @@ func (c *Cluster) startProvisioningOverNodes(config *provisionConfig, errs *prov
 
 	awaitingStatusConfigMaps := sets.NewString()
 	for _, node := range c.ValidStorage.Nodes {
-		// Check whether we need to cancel the orchestration
-		if err := opcontroller.CheckForCancelledOrchestration(c.context); err != nil {
-			return awaitingStatusConfigMaps, err
+		if c.clusterInfo.Context.Err() != nil {
+			return awaitingStatusConfigMaps, c.clusterInfo.Context.Err()
 		}
-
 		// fully resolve the storage config and resources for this node
 		// don't care about osd device class resources since it will be overwritten later for prepareosd resources
 		n := c.resolveNode(node.Name, "")
@@ -371,12 +357,8 @@ func (c *Cluster) runPrepareJob(osdProps *osdProperties, config *provisionConfig
 		return errors.Wrapf(err, "failed to generate osd provisioning job template for %s %q", nodeOrPVC, nodeOrPVCName)
 	}
 
-	if err := k8sutil.RunReplaceableJob(c.context.Clientset, job, false); err != nil {
-		if !kerrors.IsAlreadyExists(err) {
-			return errors.Wrapf(err, "failed to run provisioning job for %s %q", nodeOrPVC, nodeOrPVCName)
-		}
-		logger.Infof("letting preexisting OSD provisioning job run to completion for %s %q", nodeOrPVC, nodeOrPVCName)
-		return nil
+	if err := k8sutil.RunReplaceableJob(c.clusterInfo.Context, c.context.Clientset, job, false); err != nil {
+		return errors.Wrapf(err, "failed to run osd provisioning job for %s %q", nodeOrPVC, nodeOrPVCName)
 	}
 
 	logger.Infof("started OSD provisioning job for %s %q", nodeOrPVC, nodeOrPVCName)
@@ -390,9 +372,9 @@ func createDaemonOnPVC(c *Cluster, osd OSDInfo, pvcName string, config *provisio
 	}
 
 	message := fmt.Sprintf("Processing OSD %d on PVC %q", osd.ID, pvcName)
-	updateConditionFunc(c.context, c.clusterInfo.NamespacedName(), cephv1.ConditionProgressing, v1.ConditionTrue, cephv1.ClusterProgressingReason, message)
+	updateConditionFunc(c.clusterInfo.Context, c.context, c.clusterInfo.NamespacedName(), k8sutil.ObservedGenerationNotAvailable, cephv1.ConditionProgressing, v1.ConditionTrue, cephv1.ClusterProgressingReason, message)
 
-	_, err = k8sutil.CreateDeployment(c.context.Clientset, d)
+	_, err = k8sutil.CreateDeployment(c.clusterInfo.Context, c.context.Clientset, d)
 	return errors.Wrapf(err, "failed to create deployment for OSD %d on PVC %q", osd.ID, pvcName)
 }
 
@@ -403,8 +385,8 @@ func createDaemonOnNode(c *Cluster, osd OSDInfo, nodeName string, config *provis
 	}
 
 	message := fmt.Sprintf("Processing OSD %d on node %q", osd.ID, nodeName)
-	updateConditionFunc(c.context, c.clusterInfo.NamespacedName(), cephv1.ConditionProgressing, v1.ConditionTrue, cephv1.ClusterProgressingReason, message)
+	updateConditionFunc(c.clusterInfo.Context, c.context, c.clusterInfo.NamespacedName(), k8sutil.ObservedGenerationNotAvailable, cephv1.ConditionProgressing, v1.ConditionTrue, cephv1.ClusterProgressingReason, message)
 
-	_, err = k8sutil.CreateDeployment(c.context.Clientset, d)
+	_, err = k8sutil.CreateDeployment(c.clusterInfo.Context, c.context.Clientset, d)
 	return errors.Wrapf(err, "failed to create deployment for OSD %d on node %q", osd.ID, nodeName)
 }

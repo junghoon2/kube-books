@@ -11,9 +11,7 @@ and Rook is granted the required privileges (see below for more information).
 
 ## Minimum Version
 
-Kubernetes **v1.11** or higher is supported for the Ceph operator.
-
-**Important** If you are using K8s 1.15 or older, you will need to create a different version of the Ceph CRDs. Create the `crds.yaml` found in the [pre-k8s-1.16](https://github.com/rook/rook/blob/{{ branchName }}/cluster/examples/kubernetes/ceph/pre-k8s-1.16) subfolder of the example manifests.
+Kubernetes **v1.16** or higher is supported for the Ceph operator.
 
 ## Ceph Prerequisites
 
@@ -37,6 +35,16 @@ lsblk -f
 >```
 
 If the `FSTYPE` field is not empty, there is a filesystem on top of the corresponding device. In this example, you can use `vdb` for Ceph and can't use `vda` or its partitions.
+
+## Admission Controller
+
+Enabling the Rook admission controller is recommended to provide an additional level of validation that Rook is configured correctly with the custom resource (CR) settings. An admission controller intercepts requests to the Kubernetes API server prior to persistence of the object, but after the request is authenticated and authorized.
+
+To deploy the Rook admission controllers, install the cert manager before Rook is installed:
+
+```console
+kubectl apply -f https://github.com/jetstack/cert-manager/releases/download/v1.7.1/cert-manager.yaml
+```
 
 ## LVM package
 
@@ -83,7 +91,7 @@ Ceph requires a Linux kernel built with the RBD module. Many Linux distributions
 For example, the GKE Container-Optimised OS (COS) does not have RBD.
 
 You can test your Kubernetes nodes by running `modprobe rbd`.
-If it says 'not found', you may have to [rebuild your kernel](https://rook.io/docs/rook/master/common-issues.html#rook-agent-rbd-module-missing-error)
+If it says 'not found', you may have to [rebuild your kernel](common-issues.md#rook-agent-rbd-module-missing-error)
 or choose a different Linux distribution.
 
 ### CephFS

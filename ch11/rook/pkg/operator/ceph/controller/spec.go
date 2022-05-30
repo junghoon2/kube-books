@@ -18,7 +18,6 @@ limitations under the License.
 package controller
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path"
@@ -44,18 +43,19 @@ import (
 const (
 	// ConfigInitContainerName is the name which is given to the config initialization container
 	// in all Ceph pods.
-	ConfigInitContainerName               = "config-init"
-	logVolumeName                         = "rook-ceph-log"
-	volumeMountSubPath                    = "data"
-	crashVolumeName                       = "rook-ceph-crash"
-	daemonSocketDir                       = "/run/ceph"
-	initialDelaySecondsNonOSDDaemon int32 = 10
-	initialDelaySecondsOSDDaemon    int32 = 45
-	logCollector                          = "log-collector"
-	DaemonIDLabel                         = "ceph_daemon_id"
-	daemonTypeLabel                       = "ceph_daemon_type"
-	ExternalMgrAppName                    = "rook-ceph-mgr-external"
-	ServiceExternalMetricName             = "http-external-metrics"
+	ConfigInitContainerName                 = "config-init"
+	logVolumeName                           = "rook-ceph-log"
+	volumeMountSubPath                      = "data"
+	crashVolumeName                         = "rook-ceph-crash"
+	daemonSocketDir                         = "/run/ceph"
+	livenessProbeInitialDelaySeconds  int32 = 10
+	startupProbeFailuresDaemonDefault int32 = 6 // multiply by 10 = effective startup timeout
+	startupProbeFailuresDaemonOSD     int32 = 9 // multiply by 10 = effective startup timeout
+	logCollector                            = "log-collector"
+	DaemonIDLabel                           = "ceph_daemon_id"
+	daemonTypeLabel                         = "ceph_daemon_type"
+	ExternalMgrAppName                      = "rook-ceph-mgr-external"
+	ServiceExternalMetricName               = "http-external-metrics"
 )
 
 type daemonConfig struct {
@@ -389,15 +389,18 @@ func AppLabels(appName, namespace string) map[string]string {
 }
 
 // CephDaemonAppLabels returns pod labels common to all Rook-Ceph pods which may be useful for admins.
-// App name is the name of the application: e.g., 'rook-ceph-mon', 'rook-ceph-mgr', etc.
+// App name is the name of the application: e.g., 'rook-ceph-mon', 'rook-ceph-mgr', etc
 // Daemon type is the Ceph daemon type: "mon", "mgr", "osd", "mds", "rgw"
 // Daemon ID is the ID portion of the Ceph daemon name: "a" for "mon.a"; "c" for "mds.c"
-func CephDaemonAppLabels(appName, namespace, daemonType, daemonID string, includeNewLabels bool) map[string]string {
+// ParentName is the resource metadata.name: "rook-ceph", "my-cluster", etc
+// ResourceKind is the CR type: "CephCluster", "CephFilesystem", etc
+func CephDaemonAppLabels(appName, namespace, daemonType, daemonID, parentName, resourceKind string, includeNewLabels bool) map[string]string {
 	labels := AppLabels(appName, namespace)
 
 	// New labels cannot be applied to match selectors during upgrade
 	if includeNewLabels {
 		labels[daemonTypeLabel] = daemonType
+		k8sutil.AddRecommendedLabels(labels, "ceph-"+daemonType, parentName, resourceKind, daemonID)
 	}
 	labels[DaemonIDLabel] = daemonID
 	// Also report the daemon id keyed by its daemon type: "mon: a", "mds: c", etc.
@@ -552,16 +555,13 @@ func StoredLogAndCrashVolumeMount(varLogCephDir, varLibCephCrashDir string) []v1
 	}
 }
 
-// GenerateLivenessProbeExecDaemon makes sure a daemon has a socket and that it can be called and returns 0
+// GenerateLivenessProbeExecDaemon generates a liveness probe that makes sure a daemon has a socket,
+// that it can be called, and that it returns 0
 func GenerateLivenessProbeExecDaemon(daemonType, daemonID string) *v1.Probe {
 	confDaemon := getDaemonConfig(daemonType, daemonID)
-	initialDelaySeconds := initialDelaySecondsNonOSDDaemon
-	if daemonType == config.OsdType {
-		initialDelaySeconds = initialDelaySecondsOSDDaemon
-	}
 
 	return &v1.Probe{
-		Handler: v1.Handler{
+		ProbeHandler: v1.ProbeHandler{
 			Exec: &v1.ExecAction{
 				// Run with env -i to clean env variables in the exec context
 				// This avoids conflict with the CEPH_ARGS env
@@ -577,8 +577,28 @@ func GenerateLivenessProbeExecDaemon(daemonType, daemonID string) *v1.Probe {
 				},
 			},
 		},
-		InitialDelaySeconds: initialDelaySeconds,
+		InitialDelaySeconds: livenessProbeInitialDelaySeconds,
 	}
+}
+
+// GenerateStartupProbeExecDaemon generates a startup probe that makes sure a daemon has a socket,
+// that it can be called, and that it returns 0
+func GenerateStartupProbeExecDaemon(daemonType, daemonID string) *v1.Probe {
+	// startup probe is the same as the liveness probe, but with modified thresholds
+	probe := GenerateLivenessProbeExecDaemon(daemonType, daemonID)
+
+	// these are hardcoded to 10 so that the failure threshold can be easily multiplied by 10 to
+	// give the effective startup timeout
+	probe.InitialDelaySeconds = 10
+	probe.PeriodSeconds = 10
+
+	if daemonType == config.OsdType {
+		probe.FailureThreshold = startupProbeFailuresDaemonOSD
+	} else {
+		probe.FailureThreshold = startupProbeFailuresDaemonDefault
+	}
+
+	return probe
 }
 
 func getDaemonConfig(daemonType, daemonID string) *daemonConfig {
@@ -605,16 +625,33 @@ func (c *daemonConfig) buildAdminSocketCommand() string {
 	return command
 }
 
+func HostPathRequiresPrivileged() bool {
+	return os.Getenv("ROOK_HOSTPATH_REQUIRES_PRIVILEGED") == "true"
+}
+
 // PodSecurityContext detects if the pod needs privileges to run
 func PodSecurityContext() *v1.SecurityContext {
-	privileged := false
-	if os.Getenv("ROOK_HOSTPATH_REQUIRES_PRIVILEGED") == "true" {
-		privileged = true
-	}
+	privileged := HostPathRequiresPrivileged()
 
 	return &v1.SecurityContext{
 		Privileged: &privileged,
 	}
+}
+
+// PrivilegedContext returns a privileged Pod security context
+func PrivilegedContext(runAsRoot bool) *v1.SecurityContext {
+	privileged := true
+	rootUser := int64(0)
+
+	sec := &v1.SecurityContext{
+		Privileged: &privileged,
+	}
+
+	if runAsRoot {
+		sec.RunAsUser = &rootUser
+	}
+
+	return sec
 }
 
 // LogCollectorContainer runs a cron job to rotate logs
@@ -700,18 +737,21 @@ func ConfigureExternalMetricsEndpoint(ctx *clusterd.Context, monitoringSpec ceph
 	}
 
 	// Get the endpoint to see if anything needs to be updated
-	currentEndpoints, err := ctx.Clientset.CoreV1().Endpoints(clusterInfo.Namespace).Get(context.TODO(), endpoint.Name, metav1.GetOptions{})
+	currentEndpoints, err := ctx.Clientset.CoreV1().Endpoints(clusterInfo.Namespace).Get(clusterInfo.Context, endpoint.Name, metav1.GetOptions{})
 	if err != nil && !kerrors.IsNotFound(err) {
 		return errors.Wrap(err, "failed to fetch endpoints")
 	}
 
 	// If endpoints are identical there is nothing to do
-	if reflect.DeepEqual(currentEndpoints, endpoint) {
-		return nil
+	// First check for nil pointers otherwise dereferencing a nil pointer will cause a panic
+	if endpoint != nil && currentEndpoints != nil {
+		if reflect.DeepEqual(*currentEndpoints, *endpoint) {
+			return nil
+		}
 	}
 	logger.Debugf("diff between current endpoint and newly generated one: %v \n", cmp.Diff(currentEndpoints, endpoint, cmp.Comparer(func(x, y resource.Quantity) bool { return x.Cmp(y) == 0 })))
 
-	_, err = k8sutil.CreateOrUpdateEndpoint(ctx.Clientset, clusterInfo.Namespace, endpoint)
+	_, err = k8sutil.CreateOrUpdateEndpoint(clusterInfo.Context, ctx.Clientset, clusterInfo.Namespace, endpoint)
 	if err != nil {
 		return errors.Wrap(err, "failed to create or update mgr endpoint")
 	}

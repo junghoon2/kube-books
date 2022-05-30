@@ -28,18 +28,20 @@ func TestValidatePoolSpec(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "ec-pool",
 		},
-		Spec: PoolSpec{
-			ErasureCoded: ErasureCodedSpec{
-				CodingChunks: 1,
-				DataChunks:   2,
+		Spec: NamedBlockPoolSpec{
+			PoolSpec: PoolSpec{
+				ErasureCoded: ErasureCodedSpec{
+					CodingChunks: 1,
+					DataChunks:   2,
+				},
 			},
 		},
 	}
-	err := validatePoolSpec(p.Spec)
+	err := validatePoolSpec(p.Spec.ToNamedPoolSpec())
 	assert.NoError(t, err)
 
 	p.Spec.ErasureCoded.DataChunks = 1
-	err = validatePoolSpec(p.Spec)
+	err = validatePoolSpec(p.Spec.ToNamedPoolSpec())
 	assert.Error(t, err)
 }
 
@@ -48,14 +50,22 @@ func TestCephBlockPoolValidateUpdate(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "ec-pool",
 		},
-		Spec: PoolSpec{
-			Replicated: ReplicatedSpec{RequireSafeReplicaSize: true, Size: 3},
+		Spec: NamedBlockPoolSpec{
+			PoolSpec: PoolSpec{
+				Replicated: ReplicatedSpec{RequireSafeReplicaSize: true, Size: 3},
+			},
 		},
 	}
 	up := p.DeepCopy()
 	up.Spec.ErasureCoded.DataChunks = 2
 	up.Spec.ErasureCoded.CodingChunks = 1
 	err := up.ValidateUpdate(p)
+	assert.Error(t, err)
+
+	// validate with different name in Spec.Name
+	ip := p.DeepCopy()
+	ip.Spec.Name = "new-ec-pool"
+	err = ip.ValidateUpdate(p)
 	assert.Error(t, err)
 }
 

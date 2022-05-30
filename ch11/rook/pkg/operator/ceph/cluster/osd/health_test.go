@@ -26,6 +26,7 @@ import (
 	"github.com/rook/rook/pkg/client/clientset/versioned/scheme"
 	"github.com/rook/rook/pkg/clusterd"
 	"github.com/rook/rook/pkg/daemon/ceph/client"
+	opcontroller "github.com/rook/rook/pkg/operator/ceph/controller"
 	"github.com/rook/rook/pkg/operator/k8sutil"
 	testexec "github.com/rook/rook/pkg/operator/test"
 	exectest "github.com/rook/rook/pkg/util/exec/test"
@@ -39,7 +40,7 @@ import (
 func TestOSDHealthCheck(t *testing.T) {
 	ctx := context.TODO()
 	clientset := testexec.New(t, 2)
-	clusterInfo := client.AdminClusterInfo("fake")
+	clusterInfo := client.AdminTestClusterInfo("fake")
 
 	var execCount = 0
 	executor := &exectest.MockExecutor{
@@ -101,15 +102,21 @@ func TestOSDHealthCheck(t *testing.T) {
 }
 
 func TestMonitorStart(t *testing.T) {
-	stopCh := make(chan struct{})
-	osdMon := NewOSDHealthMonitor(&clusterd.Context{}, client.AdminClusterInfo("ns"), true, cephv1.CephClusterHealthCheckSpec{})
+	context, cancel := context.WithCancel(context.TODO())
+	monitoringRoutines := make(map[string]*opcontroller.ClusterHealth)
+	monitoringRoutines["osd"] = &opcontroller.ClusterHealth{
+		InternalCtx:    context,
+		InternalCancel: cancel,
+	}
+
+	osdMon := NewOSDHealthMonitor(&clusterd.Context{}, client.AdminTestClusterInfo("ns"), true, cephv1.CephClusterHealthCheckSpec{})
 	logger.Infof("starting osd monitor")
-	go osdMon.Start(stopCh)
-	close(stopCh)
+	go osdMon.Start(monitoringRoutines, "osd")
+	cancel()
 }
 
 func TestNewOSDHealthMonitor(t *testing.T) {
-	clusterInfo := client.AdminClusterInfo("test")
+	clusterInfo := client.AdminTestClusterInfo("test")
 	c := &clusterd.Context{}
 	time10s, _ := time.ParseDuration("10s")
 	type args struct {
@@ -135,7 +142,7 @@ func TestNewOSDHealthMonitor(t *testing.T) {
 }
 
 func TestDeviceClasses(t *testing.T) {
-	clusterInfo := client.AdminClusterInfo("fake")
+	clusterInfo := client.AdminTestClusterInfo("fake")
 	clusterInfo.SetName("rook-ceph")
 
 	var execCount = 0

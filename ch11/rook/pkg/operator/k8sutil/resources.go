@@ -22,12 +22,12 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/ghodss/yaml"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
@@ -148,37 +148,16 @@ func (info *OwnerInfo) GetUID() types.UID {
 }
 
 func MergeResourceRequirements(first, second v1.ResourceRequirements) v1.ResourceRequirements {
-	// if the first has a value not set check if second has and set it in first
-	if _, ok := first.Limits[v1.ResourceCPU]; !ok {
-		if _, ok = second.Limits[v1.ResourceCPU]; ok {
-			if first.Limits == nil {
-				first.Limits = v1.ResourceList{}
-			}
-			first.Limits[v1.ResourceCPU] = second.Limits[v1.ResourceCPU]
+	// if the first has no limits set, apply the second limits if any are specified
+	if len(first.Limits) == 0 {
+		if len(second.Limits) > 0 {
+			first.Limits = second.Limits
 		}
 	}
-	if _, ok := first.Limits[v1.ResourceMemory]; !ok {
-		if _, ok = second.Limits[v1.ResourceMemory]; ok {
-			if first.Limits == nil {
-				first.Limits = v1.ResourceList{}
-			}
-			first.Limits[v1.ResourceMemory] = second.Limits[v1.ResourceMemory]
-		}
-	}
-	if _, ok := first.Requests[v1.ResourceCPU]; !ok {
-		if _, ok = second.Requests[v1.ResourceCPU]; ok {
-			if first.Requests == nil {
-				first.Requests = v1.ResourceList{}
-			}
-			first.Requests[v1.ResourceCPU] = second.Requests[v1.ResourceCPU]
-		}
-	}
-	if _, ok := first.Requests[v1.ResourceMemory]; !ok {
-		if _, ok = second.Requests[v1.ResourceMemory]; ok {
-			if first.Requests == nil {
-				first.Requests = v1.ResourceList{}
-			}
-			first.Requests[v1.ResourceMemory] = second.Requests[v1.ResourceMemory]
+	// if the first has no requests set, apply the second requests if any are specified
+	if len(first.Requests) == 0 {
+		if len(second.Requests) > 0 {
+			first.Requests = second.Requests
 		}
 	}
 	return first
@@ -215,7 +194,7 @@ func YamlToContainerResource(raw string) ([]ContainerResource, error) {
 	if raw == "" {
 		return resources, nil
 	}
-	rawJSON, err := yaml.YAMLToJSON([]byte(raw))
+	rawJSON, err := yaml.ToJSON([]byte(raw))
 	if err != nil {
 		return resources, err
 	}

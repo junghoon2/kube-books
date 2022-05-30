@@ -39,8 +39,7 @@ type beta1CsiDriver struct {
 }
 
 // createCSIDriverInfo Registers CSI driver by creating a CSIDriver object
-func (d beta1CsiDriver) createCSIDriverInfo(ctx context.Context, clientset kubernetes.Interface, name, fsGroupPolicy string) error {
-	attach := true
+func (d beta1CsiDriver) createCSIDriverInfo(ctx context.Context, clientset kubernetes.Interface, name, fsGroupPolicy string, attachRequired bool) error {
 	mountInfo := false
 	// Create CSIDriver object
 	csiDriver := &betav1k8scsi.CSIDriver{
@@ -48,7 +47,7 @@ func (d beta1CsiDriver) createCSIDriverInfo(ctx context.Context, clientset kuber
 			Name: name,
 		},
 		Spec: betav1k8scsi.CSIDriverSpec{
-			AttachRequired: &attach,
+			AttachRequired: &attachRequired,
 			PodInfoOnMount: &mountInfo,
 		},
 	}
@@ -108,7 +107,7 @@ func (d beta1CsiDriver) deleteCSIDriverInfo(ctx context.Context, clientset kuber
 	err := clientset.StorageV1beta1().CSIDrivers().Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			logger.Debug("%q CSIDriver not found; skipping deletion.", name)
+			logger.Debugf("%q CSIDriver not found; skipping deletion.", name)
 			return nil
 		}
 	}

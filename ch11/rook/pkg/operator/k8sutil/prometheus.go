@@ -59,8 +59,7 @@ func GetServiceMonitor(filePath string) (*monitoringv1.ServiceMonitor, error) {
 }
 
 // CreateOrUpdateServiceMonitor creates serviceMonitor object or an error
-func CreateOrUpdateServiceMonitor(serviceMonitorDefinition *monitoringv1.ServiceMonitor) (*monitoringv1.ServiceMonitor, error) {
-	ctx := context.TODO()
+func CreateOrUpdateServiceMonitor(ctx context.Context, serviceMonitorDefinition *monitoringv1.ServiceMonitor) (*monitoringv1.ServiceMonitor, error) {
 	name := serviceMonitorDefinition.GetName()
 	namespace := serviceMonitorDefinition.GetNamespace()
 	logger.Debugf("creating servicemonitor %s", name)
@@ -80,53 +79,10 @@ func CreateOrUpdateServiceMonitor(serviceMonitorDefinition *monitoringv1.Service
 		return nil, fmt.Errorf("failed to retrieve servicemonitor. %v", err)
 	}
 	oldSm.Spec = serviceMonitorDefinition.Spec
+	oldSm.ObjectMeta.Labels = serviceMonitorDefinition.ObjectMeta.Labels
 	sm, err := client.MonitoringV1().ServiceMonitors(namespace).Update(ctx, oldSm, metav1.UpdateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to update servicemonitor. %v", err)
 	}
 	return sm, nil
-}
-
-// GetPrometheusRule returns provided prometheus rules or an error
-func GetPrometheusRule(ruleFilePath string) (*monitoringv1.PrometheusRule, error) {
-	ruleFile, err := ioutil.ReadFile(filepath.Clean(ruleFilePath))
-	if err != nil {
-		return nil, fmt.Errorf("prometheusRules file could not be fetched. %v", err)
-	}
-	var rule monitoringv1.PrometheusRule
-	err = k8sYAML.NewYAMLOrJSONDecoder(bytes.NewBufferString(string(ruleFile)), 1000).Decode(&rule)
-	if err != nil {
-		return nil, fmt.Errorf("prometheusRules could not be decoded. %v", err)
-	}
-	return &rule, nil
-}
-
-// CreateOrUpdatePrometheusRule creates a prometheusRule object or an error
-func CreateOrUpdatePrometheusRule(prometheusRule *monitoringv1.PrometheusRule) (*monitoringv1.PrometheusRule, error) {
-	ctx := context.TODO()
-	name := prometheusRule.GetName()
-	namespace := prometheusRule.GetNamespace()
-	logger.Debugf("creating prometheusRule %s", name)
-	client, err := getMonitoringClient()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get monitoring client. %v", err)
-	}
-	promRule, err := client.MonitoringV1().PrometheusRules(namespace).Create(ctx, prometheusRule, metav1.CreateOptions{})
-	if err != nil {
-		if !kerrors.IsAlreadyExists(err) {
-			return nil, fmt.Errorf("failed to create prometheusRules. %v", err)
-		}
-		// Get current PrometheusRule so the ResourceVersion can be set as needed
-		// for the object update operation
-		promRule, err := client.MonitoringV1().PrometheusRules(namespace).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to get prometheusRule object. %v", err)
-		}
-		promRule.Spec = prometheusRule.Spec
-		_, err = client.MonitoringV1().PrometheusRules(namespace).Update(ctx, promRule, metav1.UpdateOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to update prometheusRule. %v", err)
-		}
-	}
-	return promRule, nil
 }

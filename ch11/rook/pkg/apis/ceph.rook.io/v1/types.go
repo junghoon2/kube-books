@@ -19,7 +19,6 @@ package v1
 import (
 	"time"
 
-	rook "github.com/rook/rook/pkg/apis/rook.io"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,7 +38,7 @@ import (
 // +kubebuilder:printcolumn:name="DataDirHostPath",type=string,JSONPath=`.spec.dataDirHostPath`,description="Directory used on the K8s nodes"
 // +kubebuilder:printcolumn:name="MonCount",type=string,JSONPath=`.spec.mon.count`,description="Number of MONs"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`,description="Phase"
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Message",type=string,JSONPath=`.status.message`,description="Message"
 // +kubebuilder:printcolumn:name="Health",type=string,JSONPath=`.status.ceph.health`,description="Ceph Health"
 // +kubebuilder:printcolumn:name="External",type=boolean,JSONPath=`.spec.external.enable`
@@ -60,9 +59,12 @@ type CephClusterHealthCheckSpec struct {
 	// +optional
 	// +nullable
 	DaemonHealth DaemonHealthSpec `json:"daemonHealth,omitempty"`
-	// LivenessProbe allows to change the livenessprobe configuration for a given daemon
+	// LivenessProbe allows changing the livenessProbe configuration for a given daemon
 	// +optional
-	LivenessProbe map[rook.KeyType]*ProbeSpec `json:"livenessProbe,omitempty"`
+	LivenessProbe map[KeyType]*ProbeSpec `json:"livenessProbe,omitempty"`
+	// StartupProbe allows changing the startupProbe configuration for a given daemon
+	// +optional
+	StartupProbe map[KeyType]*ProbeSpec `json:"startupProbe,omitempty"`
 }
 
 // DaemonHealthSpec is a daemon health check
@@ -287,11 +289,6 @@ type MonitoringSpec struct {
 	// +optional
 	Enabled bool `json:"enabled,omitempty"`
 
-	// RulesNamespace is the namespace where the prometheus rules and alerts should be created.
-	// If empty, the same namespace as the cluster will be used.
-	// +optional
-	RulesNamespace string `json:"rulesNamespace,omitempty"`
-
 	// ExternalMgrEndpoints points to an existing Ceph prometheus exporter endpoint
 	// +optional
 	// +nullable
@@ -313,6 +310,9 @@ type ClusterStatus struct {
 	CephStatus  *CephStatus     `json:"ceph,omitempty"`
 	CephStorage *CephStorage    `json:"storage,omitempty"`
 	CephVersion *ClusterVersion `json:"version,omitempty"`
+	// ObservedGeneration is the latest generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 // CephDaemonsVersions show the current ceph version for different ceph daemons
@@ -353,6 +353,7 @@ type CephStatus struct {
 	Capacity       Capacity                     `json:"capacity,omitempty"`
 	// +optional
 	Versions *CephDaemonsVersions `json:"versions,omitempty"`
+	FSID     string               `json:"fsid,omitempty"`
 }
 
 // Capacity is the capacity information of a Ceph Cluster
@@ -414,6 +415,8 @@ const (
 	ReconcileSucceeded ConditionReason = "ReconcileSucceeded"
 	// ReconcileFailed represents when a resource reconciliation failed.
 	ReconcileFailed ConditionReason = "ReconcileFailed"
+	// ReconcileStarted represents when a resource reconciliation started.
+	ReconcileStarted ConditionReason = "ReconcileStarted"
 
 	// DeletingReason represents when Rook has detected a resource object should be deleted.
 	DeletingReason ConditionReason = "Deleting"
@@ -562,11 +565,12 @@ type CrashCollectorSpec struct {
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // CephBlockPool represents a Ceph Storage Pool
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:subresource:status
 type CephBlockPool struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata"`
-	Spec              PoolSpec `json:"spec"`
+	Spec              NamedBlockPoolSpec `json:"spec"`
 	// +kubebuilder:pruning:PreserveUnknownFields
 	Status *CephBlockPoolStatus `json:"status,omitempty"`
 }
@@ -640,6 +644,26 @@ type PoolSpec struct {
 	Quotas QuotaSpec `json:"quotas,omitempty"`
 }
 
+// NamedBlockPoolSpec allows a block pool to be created with a non-default name.
+// This is more specific than the NamedPoolSpec so we get schema validation on the
+// allowed pool names that can be specified.
+type NamedBlockPoolSpec struct {
+	// The desired name of the pool if different from the CephBlockPool CR name.
+	// +kubebuilder:validation:Enum=device_health_metrics;.nfs;.mgr
+	// +optional
+	Name string `json:"name,omitempty"`
+	// The core pool configuration
+	PoolSpec `json:",inline"`
+}
+
+// NamedPoolSpec represents the named ceph pool spec
+type NamedPoolSpec struct {
+	// Name of the pool
+	Name string `json:"name,omitempty"`
+	// PoolSpec represents the spec of ceph pool
+	PoolSpec `json:",inline"`
+}
+
 // MirrorHealthCheckSpec represents the health specification of a Ceph Storage Pool mirror
 type MirrorHealthCheckSpec struct {
 	// +optional
@@ -660,6 +684,10 @@ type CephBlockPoolStatus struct {
 	// +optional
 	// +nullable
 	Info map[string]string `json:"info,omitempty"`
+	// ObservedGeneration is the latest generation observed by the controller.
+	// +optional
+	ObservedGeneration int64       `json:"observedGeneration,omitempty"`
+	Conditions         []Condition `json:"conditions,omitempty"`
 }
 
 // MirroringStatusSpec is the status of the pool mirroring
@@ -818,6 +846,9 @@ type SnapshotSchedule struct {
 type Status struct {
 	// +optional
 	Phase string `json:"phase,omitempty"`
+	// ObservedGeneration is the latest generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 // ReplicatedSpec represents the spec for replication in a pool
@@ -917,14 +948,15 @@ type QuotaSpec struct {
 
 // ErasureCodedSpec represents the spec for erasure code in a pool
 type ErasureCodedSpec struct {
-	// Number of coding chunks per object in an erasure coded storage pool (required for erasure-coded pool type)
+	// Number of coding chunks per object in an erasure coded storage pool (required for erasure-coded pool type).
+	// This is the number of OSDs that can be lost simultaneously before data cannot be recovered.
 	// +kubebuilder:validation:Minimum=0
-	// +kubebuilder:validation:Maximum=9
 	CodingChunks uint `json:"codingChunks"`
 
-	// Number of data chunks per object in an erasure coded storage pool (required for erasure-coded pool type)
+	// Number of data chunks per object in an erasure coded storage pool (required for erasure-coded pool type).
+	// The number of chunks required to recover an object when any single OSD is lost is the same
+	// as dataChunks so be aware that the larger the number of data chunks, the higher the cost of recovery.
 	// +kubebuilder:validation:Minimum=0
-	// +kubebuilder:validation:Maximum=9
 	DataChunks uint `json:"dataChunks"`
 
 	// The algorithm for erasure coding
@@ -964,9 +996,9 @@ type FilesystemSpec struct {
 	// +nullable
 	MetadataPool PoolSpec `json:"metadataPool"`
 
-	// The data pool settings
+	// The data pool settings, with optional predefined pool name.
 	// +nullable
-	DataPools []PoolSpec `json:"dataPools"`
+	DataPools []NamedPoolSpec `json:"dataPools"`
 
 	// Preserve pools on filesystem deletion
 	// +optional
@@ -1011,13 +1043,13 @@ type MetadataServerSpec struct {
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +nullable
 	// +optional
-	Annotations rook.Annotations `json:"annotations,omitempty"`
+	Annotations Annotations `json:"annotations,omitempty"`
 
 	// The labels-related configuration to add/set on each Pod related object.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +nullable
 	// +optional
-	Labels rook.Labels `json:"labels,omitempty"`
+	Labels Labels `json:"labels,omitempty"`
 
 	// The resource requirements for the rgw pods
 	// +kubebuilder:pruning:PreserveUnknownFields
@@ -1028,6 +1060,12 @@ type MetadataServerSpec struct {
 	// PriorityClassName sets priority classes on components
 	// +optional
 	PriorityClassName string `json:"priorityClassName,omitempty"`
+
+	// +optional
+	LivenessProbe *ProbeSpec `json:"livenessProbe,omitempty"`
+
+	// +optional
+	StartupProbe *ProbeSpec `json:"startupProbe,omitempty"`
 }
 
 // FSMirroringSpec represents the setting for a mirrored filesystem
@@ -1076,6 +1114,10 @@ type CephFilesystemStatus struct {
 	// MirroringStatus is the filesystem mirroring status
 	// +optional
 	MirroringStatus *FilesystemMirroringInfoSpec `json:"mirroringStatus,omitempty"`
+	Conditions      []Condition                  `json:"conditions,omitempty"`
+	// ObservedGeneration is the latest generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 // FilesystemMirroringInfo is the status of the pool mirroring
@@ -1225,6 +1267,7 @@ type PeerStatSpec struct {
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // CephObjectStore represents a Ceph Object Store Gateway
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:subresource:status
 type CephObjectStore struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -1286,6 +1329,10 @@ type BucketHealthCheckSpec struct {
 	Bucket HealthCheckSpec `json:"bucket,omitempty"`
 	// +optional
 	LivenessProbe *ProbeSpec `json:"livenessProbe,omitempty"`
+	// +optional
+	ReadinessProbe *ProbeSpec `json:"readinessProbe,omitempty"`
+	// +optional
+	StartupProbe *ProbeSpec `json:"startupProbe,omitempty"`
 }
 
 // HealthCheckSpec represents the health check of an object store bucket
@@ -1337,13 +1384,13 @@ type GatewaySpec struct {
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +nullable
 	// +optional
-	Annotations rook.Annotations `json:"annotations,omitempty"`
+	Annotations Annotations `json:"annotations,omitempty"`
 
 	// The labels-related configuration to add/set on each Pod related object.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +nullable
 	// +optional
-	Labels rook.Labels `json:"labels,omitempty"`
+	Labels Labels `json:"labels,omitempty"`
 
 	// The resource requirements for the rgw pods
 	// +kubebuilder:pruning:PreserveUnknownFields
@@ -1384,6 +1431,9 @@ type ObjectStoreStatus struct {
 	// +nullable
 	Info       map[string]string `json:"info,omitempty"`
 	Conditions []Condition       `json:"conditions,omitempty"`
+	// ObservedGeneration is the latest generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 // BucketStatus represents the status of a bucket
@@ -1403,6 +1453,7 @@ type BucketStatus struct {
 // +genclient:noStatus
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +kubebuilder:resource:shortName=rcou;objectuser
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:subresource:status
 type CephObjectStoreUser struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -1420,6 +1471,9 @@ type ObjectStoreUserStatus struct {
 	// +optional
 	// +nullable
 	Info map[string]string `json:"info,omitempty"`
+	// ObservedGeneration is the latest generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -1514,18 +1568,20 @@ type CephObjectRealmList struct {
 
 // ObjectRealmSpec represent the spec of an ObjectRealm
 type ObjectRealmSpec struct {
-	Pull PullSpec `json:"pull"`
+	Pull PullSpec `json:"pull,omitempty"`
 }
 
 // PullSpec represents the pulling specification of a Ceph Object Storage Gateway Realm
 type PullSpec struct {
-	Endpoint string `json:"endpoint"`
+	// +kubebuilder:validation:Pattern=`^https*://`
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 // CephObjectZoneGroup represents a Ceph Object Store Gateway Zone Group
 // +genclient
 // +genclient:noStatus
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:subresource:status
 type CephObjectZoneGroup struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -1554,6 +1610,7 @@ type ObjectZoneGroupSpec struct {
 // +genclient
 // +genclient:noStatus
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:subresource:status
 type CephObjectZone struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -1586,12 +1643,199 @@ type ObjectZoneSpec struct {
 	DataPool PoolSpec `json:"dataPool"`
 }
 
+// CephBucketTopic represents a Ceph Object Topic for Bucket Notifications
+// +genclient
+// +genclient:noStatus
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:subresource:status
+type CephBucketTopic struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata"`
+	Spec              BucketTopicSpec `json:"spec"`
+	// +kubebuilder:pruning:PreserveUnknownFields
+	// +optional
+	Status *BucketTopicStatus `json:"status,omitempty"`
+}
+
+// BucketTopicStatus represents the Status of a CephBucketTopic
+type BucketTopicStatus struct {
+	// +optional
+	Phase string `json:"phase,omitempty"`
+	// The ARN of the topic generated by the RGW
+	// +optional
+	// +nullable
+	ARN *string `json:"ARN,omitempty"`
+	// ObservedGeneration is the latest generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+}
+
+// CephBucketTopicList represents a list Ceph Object Store Bucket Notification Topics
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+type CephBucketTopicList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata"`
+	Items           []CephBucketTopic `json:"items"`
+}
+
+// BucketTopicSpec represent the spec of a Bucket Topic
+type BucketTopicSpec struct {
+	// The name of the object store on which to define the topic
+	// +kubebuilder:validation:MinLength=1
+	ObjectStoreName string `json:"objectStoreName"`
+	// The namespace of the object store on which to define the topic
+	// +kubebuilder:validation:MinLength=1
+	ObjectStoreNamespace string `json:"objectStoreNamespace"`
+	// Data which is sent in each event
+	// +optional
+	OpaqueData string `json:"opaqueData,omitempty"`
+	// Indication whether notifications to this endpoint are persistent or not
+	// +optional
+	Persistent bool `json:"persistent,omitempty"`
+	// Contains the endpoint spec of the topic
+	Endpoint TopicEndpointSpec `json:"endpoint"`
+}
+
+// TopicEndpointSpec contains exactly one of the endpoint specs of a Bucket Topic
+type TopicEndpointSpec struct {
+	// Spec of HTTP endpoint
+	// +optional
+	HTTP *HTTPEndpointSpec `json:"http,omitempty"`
+	// Spec of AMQP endpoint
+	// +optional
+	AMQP *AMQPEndpointSpec `json:"amqp,omitempty"`
+	// Spec of Kafka endpoint
+	// +optional
+	Kafka *KafkaEndpointSpec `json:"kafka,omitempty"`
+}
+
+// HTTPEndpointSpec represent the spec of an HTTP endpoint of a Bucket Topic
+type HTTPEndpointSpec struct {
+	// The URI of the HTTP endpoint to push notification to
+	// +kubebuilder:validation:MinLength=1
+	URI string `json:"uri"`
+	// Indicate whether the server certificate is validated by the client or not
+	// +optional
+	DisableVerifySSL bool `json:"disableVerifySSL,omitempty"`
+	// Send the notifications with the CloudEvents header: https://github.com/cloudevents/spec/blob/main/cloudevents/adapters/aws-s3.md
+	// Supported for Ceph Quincy (v17) or newer.
+	// +optional
+	SendCloudEvents bool `json:"sendCloudEvents,omitempty"`
+}
+
+// AMQPEndpointSpec represent the spec of an AMQP endpoint of a Bucket Topic
+type AMQPEndpointSpec struct {
+	// The URI of the AMQP endpoint to push notification to
+	// +kubebuilder:validation:MinLength=1
+	URI string `json:"uri"`
+	// Name of the exchange that is used to route messages based on topics
+	// +kubebuilder:validation:MinLength=1
+	Exchange string `json:"exchange"`
+	// Indicate whether the server certificate is validated by the client or not
+	// +optional
+	DisableVerifySSL bool `json:"disableVerifySSL,omitempty"`
+	// The ack level required for this topic (none/broker/routeable)
+	// +kubebuilder:validation:Enum=none;broker;routeable
+	// +kubebuilder:default=broker
+	// +optional
+	AckLevel string `json:"ackLevel,omitempty"`
+}
+
+// KafkaEndpointSpec represent the spec of a Kafka endpoint of a Bucket Topic
+type KafkaEndpointSpec struct {
+	// The URI of the Kafka endpoint to push notification to
+	// +kubebuilder:validation:MinLength=1
+	URI string `json:"uri"`
+	// Indicate whether to use SSL when communicating with the broker
+	// +optional
+	UseSSL bool `json:"useSSL,omitempty"`
+	// Indicate whether the server certificate is validated by the client or not
+	// +optional
+	DisableVerifySSL bool `json:"disableVerifySSL,omitempty"`
+	// The ack level required for this topic (none/broker)
+	// +kubebuilder:validation:Enum=none;broker
+	// +kubebuilder:default=broker
+	// +optional
+	AckLevel string `json:"ackLevel,omitempty"`
+}
+
+// CephBucketNotification represents a Bucket Notifications
+// +genclient
+// +genclient:noStatus
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:subresource:status
+type CephBucketNotification struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata"`
+	Spec              BucketNotificationSpec `json:"spec"`
+	// +kubebuilder:pruning:PreserveUnknownFields
+	// +optional
+	Status *Status `json:"status,omitempty"`
+}
+
+// CephBucketNotificationList represents a list Ceph Object Store Bucket Notification Topics
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+type CephBucketNotificationList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata"`
+	Items           []CephBucketNotification `json:"items"`
+}
+
+// BucketNotificationSpec represent the event type of the bucket notification
+// +kubebuilder:validation:Enum="s3:ObjectCreated:*";"s3:ObjectCreated:Put";"s3:ObjectCreated:Post";"s3:ObjectCreated:Copy";"s3:ObjectCreated:CompleteMultipartUpload";"s3:ObjectRemoved:*";"s3:ObjectRemoved:Delete";"s3:ObjectRemoved:DeleteMarkerCreated"
+type BucketNotificationEvent string
+
+// BucketNotificationSpec represent the spec of a Bucket Notification
+type BucketNotificationSpec struct {
+	// The name of the topic associated with this notification
+	// +kubebuilder:validation:MinLength=1
+	Topic string `json:"topic"`
+	// List of events that should trigger the notification
+	// +optional
+	Events []BucketNotificationEvent `json:"events,omitempty"`
+	// Spec of notification filter
+	// +optional
+	Filter *NotificationFilterSpec `json:"filter,omitempty"`
+}
+
+// NotificationFilterRule represent a single rule in the Notification Filter spec
+type NotificationFilterRule struct {
+	// Name of the metadata or tag
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+	// Value to filter on
+	Value string `json:"value"`
+}
+
+// NotificationKeyFilterRule represent a single key rule in the Notification Filter spec
+type NotificationKeyFilterRule struct {
+	// Name of the filter - prefix/suffix/regex
+	// +kubebuilder:validation:Enum=prefix;suffix;regex
+	Name string `json:"name"`
+	// Value to filter on
+	Value string `json:"value"`
+}
+
+// NotificationFilterSpec represent the spec of a Bucket Notification filter
+type NotificationFilterSpec struct {
+	// Filters based on the object's key
+	// +optional
+	KeyFilters []NotificationKeyFilterRule `json:"keyFilters,omitempty"`
+	// Filters based on the object's metadata
+	// +optional
+	MetadataFilters []NotificationFilterRule `json:"metadataFilters,omitempty"`
+	// Filters based on the object's tags
+	// +optional
+	TagFilters []NotificationFilterRule `json:"tagFilters,omitempty"`
+}
+
 // RGWServiceSpec represent the spec for RGW service
 type RGWServiceSpec struct {
 	// The annotations-related configuration to add/set on each rgw service.
 	// nullable
 	// optional
-	Annotations rook.Annotations `json:"annotations,omitempty"`
+	Annotations Annotations `json:"annotations,omitempty"`
 }
 
 // CephNFS represents a Ceph NFS
@@ -1630,11 +1874,17 @@ type NFSGaneshaSpec struct {
 
 // GaneshaRADOSSpec represents the specification of a Ganesha RADOS object
 type GaneshaRADOSSpec struct {
-	// Pool is the RADOS pool where NFS client recovery data is stored.
-	Pool string `json:"pool"`
+	// The Ceph pool used store the shared configuration for NFS-Ganesha daemons.
+	// This setting is required for Ceph v15 and ignored for Ceph v16.
+	// As of Ceph Pacific 16.2.7+, this is internally hardcoded to ".nfs".
+	// +optional
+	Pool string `json:"pool,omitempty"`
 
-	// Namespace is the RADOS namespace where NFS client recovery data is stored.
-	Namespace string `json:"namespace"`
+	// The namespace inside the Ceph pool (set by 'pool') where shared NFS-Ganesha config is stored.
+	// This setting is required for Ceph v15 and ignored for Ceph v16.
+	// As of Ceph Pacific v16+, this is internally set to the name of the CephNFS.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // GaneshaServerSpec represents the specification of a Ganesha Server
@@ -1652,13 +1902,13 @@ type GaneshaServerSpec struct {
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +nullable
 	// +optional
-	Annotations rook.Annotations `json:"annotations,omitempty"`
+	Annotations Annotations `json:"annotations,omitempty"`
 
 	// The labels-related configuration to add/set on each Pod related object.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +nullable
 	// +optional
-	Labels rook.Labels `json:"labels,omitempty"`
+	Labels Labels `json:"labels,omitempty"`
 
 	// Resources set resource requests and limits
 	// +kubebuilder:pruning:PreserveUnknownFields
@@ -1689,6 +1939,12 @@ type NetworkSpec struct {
 	// +optional
 	Selectors map[string]string `json:"selectors,omitempty"`
 
+	// Settings for network connections such as compression and encryption across the
+	// wire.
+	// +nullable
+	// +optional
+	Connections *ConnectionsSpec `json:"connections,omitempty"`
+
 	// HostNetwork to enable host network
 	// +optional
 	HostNetwork bool `json:"hostNetwork,omitempty"`
@@ -1702,6 +1958,36 @@ type NetworkSpec struct {
 	// DualStack determines whether Ceph daemons should listen on both IPv4 and IPv6
 	// +optional
 	DualStack bool `json:"dualStack,omitempty"`
+}
+
+type ConnectionsSpec struct {
+	// Encryption settings for the network connections.
+	// +nullable
+	// +optional
+	Encryption *EncryptionSpec `json:"encryption,omitempty"`
+
+	// Compression settings for the network connections.
+	// +nullable
+	// +optional
+	Compression *CompressionSpec `json:"compression,omitempty"`
+}
+
+type EncryptionSpec struct {
+	// Whether to encrypt the data in transit across the wire to prevent eavesdropping
+	// the data on the network. The default is not set. Even if encryption is not enabled,
+	// clients still establish a strong initial authentication for the connection
+	// and data integrity is still validated with a crc check. When encryption is enabled,
+	// all communication between clients and Ceph daemons, or between Ceph daemons will
+	// be encrypted.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+}
+
+type CompressionSpec struct {
+	// Whether to compress the data in transit across the wire.
+	// The default is not set. Requires Ceph Quincy (v17) or newer.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 // DisruptionManagementSpec configures management of daemon disruptions
@@ -1737,6 +2023,7 @@ type DisruptionManagementSpec struct {
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // CephClient represents a Ceph Client
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:subresource:status
 type CephClient struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -1773,6 +2060,9 @@ type CephClientStatus struct {
 	// +optional
 	// +nullable
 	Info map[string]string `json:"info,omitempty"`
+	// ObservedGeneration is the latest generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 // CleanupPolicySpec represents a Ceph Cluster cleanup policy
@@ -1820,6 +2110,7 @@ type SanitizeDisksSpec struct {
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // CephRBDMirror represents a Ceph RBD Mirror
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:subresource:status
 type CephRBDMirror struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -1859,13 +2150,13 @@ type RBDMirroringSpec struct {
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +nullable
 	// +optional
-	Annotations rook.Annotations `json:"annotations,omitempty"`
+	Annotations Annotations `json:"annotations,omitempty"`
 
 	// The labels-related configuration to add/set on each Pod related object.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +nullable
 	// +optional
-	Labels rook.Labels `json:"labels,omitempty"`
+	Labels Labels `json:"labels,omitempty"`
 
 	// The resource requirements for the rbd mirror pods
 	// +kubebuilder:pruning:PreserveUnknownFields
@@ -1890,6 +2181,7 @@ type MirroringPeerSpec struct {
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // CephFilesystemMirror is the Ceph Filesystem Mirror object definition
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:subresource:status
 type CephFilesystemMirror struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -1918,12 +2210,12 @@ type FilesystemMirroringSpec struct {
 	// The annotations-related configuration to add/set on each Pod related object.
 	// +nullable
 	// +optional
-	Annotations rook.Annotations `json:"annotations,omitempty"`
+	Annotations Annotations `json:"annotations,omitempty"`
 
 	// The labels-related configuration to add/set on each Pod related object.
 	// +nullable
 	// +optional
-	Labels rook.Labels `json:"labels,omitempty"`
+	Labels Labels `json:"labels,omitempty"`
 
 	// The resource requirements for the cephfs-mirror pods
 	// +nullable
@@ -2012,7 +2304,7 @@ type Selection struct {
 }
 
 // PlacementSpec is the placement for core ceph daemons part of the CephCluster CRD
-type PlacementSpec map[rook.KeyType]Placement
+type PlacementSpec map[KeyType]Placement
 
 // Placement is the placement for an object
 type Placement struct {
@@ -2049,7 +2341,7 @@ type ProbeSpec struct {
 }
 
 // PriorityClassNamesSpec is a map of priority class names to be assigned to components
-type PriorityClassNamesSpec map[rook.KeyType]string
+type PriorityClassNamesSpec map[KeyType]string
 
 // StorageClassDeviceSet is a storage class device set
 // +nullable
@@ -2093,4 +2385,95 @@ type StorageClassDeviceSet struct {
 	// Whether to encrypt the deviceSet
 	// +optional
 	Encrypted bool `json:"encrypted,omitempty"`
+}
+
+// +genclient
+// +genclient:noStatus
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// CephFilesystemSubVolumeGroup represents a Ceph Filesystem SubVolumeGroup
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:subresource:status
+type CephFilesystemSubVolumeGroup struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata"`
+	// Spec represents the specification of a Ceph Filesystem SubVolumeGroup
+	Spec CephFilesystemSubVolumeGroupSpec `json:"spec"`
+	// Status represents the status of a CephFilesystem SubvolumeGroup
+	// +kubebuilder:pruning:PreserveUnknownFields
+	// +optional
+	Status *CephFilesystemSubVolumeGroupStatus `json:"status,omitempty"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// CephFilesystemSubVolumeGroup represents a list of Ceph Clients
+type CephFilesystemSubVolumeGroupList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata"`
+	Items           []CephFilesystemSubVolumeGroup `json:"items"`
+}
+
+// CephFilesystemSubVolumeGroupSpec represents the specification of a Ceph Filesystem SubVolumeGroup
+type CephFilesystemSubVolumeGroupSpec struct {
+	// FilesystemName is the name of Ceph Filesystem SubVolumeGroup volume name. Typically it's the name of
+	// the CephFilesystem CR. If not coming from the CephFilesystem CR, it can be retrieved from the
+	// list of Ceph Filesystem volumes with `ceph fs volume ls`. To learn more about Ceph Filesystem
+	// abstractions see https://docs.ceph.com/en/latest/cephfs/fs-volumes/#fs-volumes-and-subvolumes
+	FilesystemName string `json:"filesystemName"`
+}
+
+// CephFilesystemSubVolumeGroupStatus represents the Status of Ceph Filesystem SubVolumeGroup
+type CephFilesystemSubVolumeGroupStatus struct {
+	// +optional
+	Phase ConditionType `json:"phase,omitempty"`
+	// +optional
+	// +nullable
+	Info map[string]string `json:"info,omitempty"`
+	// ObservedGeneration is the latest generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+}
+
+// +genclient
+// +genclient:noStatus
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// CephBlockPoolRadosNamespace represents a Ceph BlockPool Rados Namespace
+// +kubebuilder:subresource:status
+type CephBlockPoolRadosNamespace struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata"`
+	// Spec represents the specification of a Ceph BlockPool Rados Namespace
+	Spec CephBlockPoolRadosNamespaceSpec `json:"spec"`
+	// Status represents the status of a CephBlockPool Rados Namespace
+	// +kubebuilder:pruning:PreserveUnknownFields
+	// +optional
+	Status *CephBlockPoolRadosNamespaceStatus `json:"status,omitempty"`
+}
+
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+
+// CephBlockPoolRadosNamespaceList represents a list of Ceph BlockPool Rados Namespace
+type CephBlockPoolRadosNamespaceList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata"`
+	Items           []CephBlockPoolRadosNamespace `json:"items"`
+}
+
+// CephBlockPoolRadosNamespaceSpec represents the specification of a CephBlockPool Rados Namespace
+type CephBlockPoolRadosNamespaceSpec struct {
+	// BlockPoolName is the name of Ceph BlockPool. Typically it's the name of
+	// the CephBlockPool CR.
+	BlockPoolName string `json:"blockPoolName"`
+}
+
+// CephBlockPoolRadosNamespaceStatus represents the Status of Ceph BlockPool
+// Rados Namespace
+type CephBlockPoolRadosNamespaceStatus struct {
+	// +optional
+	Phase ConditionType `json:"phase,omitempty"`
+	// +optional
+	// +nullable
+	Info map[string]string `json:"info,omitempty"`
 }

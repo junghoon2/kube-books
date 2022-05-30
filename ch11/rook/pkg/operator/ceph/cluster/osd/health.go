@@ -17,7 +17,6 @@ limitations under the License.
 package osd
 
 import (
-	"context"
 	"fmt"
 	"reflect"
 	"time"
@@ -26,6 +25,7 @@ import (
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	"github.com/rook/rook/pkg/clusterd"
 	"github.com/rook/rook/pkg/daemon/ceph/client"
+	opcontroller "github.com/rook/rook/pkg/operator/ceph/controller"
 	"github.com/rook/rook/pkg/operator/ceph/reporting"
 	"github.com/rook/rook/pkg/operator/k8sutil"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -69,16 +69,23 @@ func NewOSDHealthMonitor(context *clusterd.Context, clusterInfo *client.ClusterI
 }
 
 // Start runs monitoring logic for osds status at set intervals
-func (m *OSDHealthMonitor) Start(stopCh chan struct{}) {
+func (m *OSDHealthMonitor) Start(monitoringRoutines map[string]*opcontroller.ClusterHealth, daemon string) {
 
 	for {
+		// We must perform this check otherwise the case will check an index that does not exist anymore and
+		// we will get an invalid pointer error and the go routine will panic
+		if _, ok := monitoringRoutines[daemon]; !ok {
+			logger.Infof("ceph cluster %q has been deleted. stopping monitoring of OSDs", m.clusterInfo.Namespace)
+			return
+		}
 		select {
 		case <-time.After(*m.interval):
 			logger.Debug("checking osd processes status.")
 			m.checkOSDHealth()
 
-		case <-stopCh:
-			logger.Infof("Stopping monitoring of OSDs in namespace %q", m.clusterInfo.Namespace)
+		case <-monitoringRoutines[daemon].InternalCtx.Done():
+			logger.Infof("stopping monitoring of OSDs in namespace %q", m.clusterInfo.Namespace)
+			delete(monitoringRoutines, daemon)
 			return
 		}
 	}
@@ -156,7 +163,7 @@ func (m *OSDHealthMonitor) checkOSDDump() error {
 
 func (m *OSDHealthMonitor) removeOSDDeploymentIfSafeToDestroy(outOSDid int) error {
 	label := fmt.Sprintf("ceph-osd-id=%d", outOSDid)
-	dp, err := k8sutil.GetDeployments(m.context.Clientset, m.clusterInfo.Namespace, label)
+	dp, err := k8sutil.GetDeployments(m.clusterInfo.Context, m.context.Clientset, m.clusterInfo.Namespace, label)
 	if err != nil {
 		if kerrors.IsNotFound(err) {
 			return nil
@@ -175,7 +182,7 @@ func (m *OSDHealthMonitor) removeOSDDeploymentIfSafeToDestroy(outOSDid int) erro
 			currentTime := time.Now().UTC()
 			if podDeletionTimeStamp.Before(currentTime) {
 				logger.Infof("osd.%d is 'safe-to-destroy'. removing the osd deployment.", outOSDid)
-				if err := k8sutil.DeleteDeployment(m.context.Clientset, dp.Items[0].Namespace, dp.Items[0].Name); err != nil {
+				if err := k8sutil.DeleteDeployment(m.clusterInfo.Context, m.context.Clientset, dp.Items[0].Namespace, dp.Items[0].Name); err != nil {
 					return errors.Wrapf(err, "failed to delete osd deployment %s", dp.Items[0].Name)
 				}
 			}
@@ -186,13 +193,13 @@ func (m *OSDHealthMonitor) removeOSDDeploymentIfSafeToDestroy(outOSDid int) erro
 
 // updateCephStorage updates the CR with deviceclass details
 func (m *OSDHealthMonitor) updateCephStatus(devices []string) {
-	cephCluster := &cephv1.CephCluster{}
+	cephCluster := cephv1.CephCluster{}
 	cephClusterStorage := cephv1.CephStorage{}
 
 	for _, device := range devices {
 		cephClusterStorage.DeviceClasses = append(cephClusterStorage.DeviceClasses, cephv1.DeviceClasses{Name: device})
 	}
-	err := m.context.Client.Get(context.TODO(), m.clusterInfo.NamespacedName(), cephCluster)
+	err := m.context.Client.Get(m.clusterInfo.Context, m.clusterInfo.NamespacedName(), &cephCluster)
 	if err != nil {
 		if kerrors.IsNotFound(err) {
 			logger.Debug("CephCluster resource not found. Ignoring since object must be deleted.")
@@ -201,9 +208,9 @@ func (m *OSDHealthMonitor) updateCephStatus(devices []string) {
 		logger.Errorf("failed to retrieve ceph cluster %q to update ceph Storage. %v", m.clusterInfo.NamespacedName().Name, err)
 		return
 	}
-	if !reflect.DeepEqual(cephCluster.Status.CephStorage, &cephClusterStorage) {
+	if !reflect.DeepEqual(cephCluster.Status.CephStorage, cephClusterStorage) {
 		cephCluster.Status.CephStorage = &cephClusterStorage
-		if err := reporting.UpdateStatus(m.context.Client, cephCluster); err != nil {
+		if err := reporting.UpdateStatus(m.context.Client, &cephCluster); err != nil {
 			logger.Errorf("failed to update cluster %q Storage. %v", m.clusterInfo.NamespacedName().Name, err)
 			return
 		}

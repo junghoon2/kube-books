@@ -18,243 +18,127 @@ package operator
 
 import (
 	"context"
+	"io/ioutil"
 	"os"
+	"path"
 
+	cs "github.com/jetstack/cert-manager/pkg/client/clientset/versioned/typed/certmanager/v1"
 	"github.com/pkg/errors"
 	"github.com/rook/rook/pkg/clusterd"
-	"github.com/rook/rook/pkg/operator/ceph/controller"
-	"github.com/rook/rook/pkg/operator/ceph/csi"
 	"github.com/rook/rook/pkg/operator/k8sutil"
-	v1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 )
 
 const (
-	appName                                  = "rook-ceph-admission-controller"
-	secretVolumeName                         = "webhook-certificates" // #nosec G101 This is just a var name, not a real secret
-	serviceAccountName                       = "rook-ceph-admission-controller"
-	portName                                 = "webhook-api"
-	servicePort                        int32 = 443
-	serverPort                         int32 = 8079
-	tlsDir                                   = "/etc/webhook"
-	admissionControllerTolerationsEnv        = "ADMISSION_CONTROLLER_TOLERATIONS"
-	admissionControllerNodeAffinityEnv       = "ADMISSION_CONTROLLER_NODE_AFFINITY"
+	admissionControllerAppName       = "rook-ceph-admission-controller"
+	tlsPort                    int32 = 443
+	webhookEnv                       = "ROOK_DISABLE_ADMISSION_CONTROLLER"
 )
 
 var (
-	namespace = os.Getenv(k8sutil.PodNamespaceEnvVar)
+	namespace              = os.Getenv(k8sutil.PodNamespaceEnvVar)
+	certManagerWebhookName = "cert-manager-webhook"
 )
 
-func isSecretPresent(ctx context.Context, context *clusterd.Context) (bool, error) {
-	logger.Infof("looking for secret %q", appName)
-	_, err := context.Clientset.CoreV1().Secrets(namespace).Get(ctx, appName, metav1.GetOptions{})
+func createWebhook(ctx context.Context, context *clusterd.Context) (bool, error) {
+	certMgrClient, err := cs.NewForConfig(context.KubeConfig)
 	if err != nil {
-		// If secret is not found. All good ! Proceed with rook without admission controllers
+		logger.Errorf("failed to set config for cert-manager. %v", err)
+		return false, nil
+	}
+
+	if os.Getenv(webhookEnv) == "true" {
+		logger.Info("delete Issuer and Certificate since secret is not found")
+		if err = deleteIssuerAndCetificate(ctx, certMgrClient, context); err != nil {
+			logger.Errorf("failed to delete issuer or certificate. %v", err)
+		}
+		return false, nil
+	}
+
+	logger.Infof("Fetching webhook %s to see if cert-manager is installed.", certManagerWebhookName)
+	_, err = context.Clientset.AdmissionregistrationV1().ValidatingWebhookConfigurations().Get(ctx, certManagerWebhookName, metav1.GetOptions{})
+	if err != nil {
+		logger.Info("failed to get cert manager")
+		return false, nil
+	}
+
+	issuer, err := fetchorCreateIssuer(ctx, certMgrClient)
+	if err != nil {
+		logger.Errorf("issuer creation failed %v", err)
+		return false, nil
+	}
+
+	err = fetchorCreateCertificate(ctx, certMgrClient, issuer)
+	if err != nil {
+		logger.Errorf("certificate creation failed %v", err)
+		return false, nil
+	}
+
+	logger.Infof("looking for admission webhook secret %q", admissionControllerAppName)
+	s, err := context.Clientset.CoreV1().Secrets(namespace).Get(ctx, admissionControllerAppName, metav1.GetOptions{})
+	if err != nil {
 		if apierrors.IsNotFound(err) {
-			logger.Infof("secret %q not found. proceeding without the admission controller", appName)
+			// If secret is not found. All good ! Proceed with rook without admission controllers
+			logger.Info("delete Issuer and Certificate since secret is not found")
+			if err = deleteIssuerAndCetificate(ctx, certMgrClient, context); err != nil {
+				logger.Infof("could not delete issuer or certificate. %v", err)
+			}
+			logger.Infof("admission webhook secret %q not found. proceeding without the admission controller", admissionControllerAppName)
 			return false, nil
 		}
 		return false, err
 	}
+
+	logger.Infof("admission webhook secret %q found", admissionControllerAppName)
+
+	err = addValidatingWebhookConfig(ctx, context)
+	if err != nil {
+		logger.Errorf("adding webhook failed %v", err)
+		return false, nil
+	}
+
+	for k, data := range s.Data {
+		filePath := path.Join(certDir, k)
+		// We must use 0600 mode so that the files can be overridden each time the Secret is fetched
+		// to keep an updated content
+		err := ioutil.WriteFile(filePath, data, 0600)
+		if err != nil {
+			return false, errors.Wrapf(err, "failed to write secret content to file %q", filePath)
+		}
+	}
+
 	return true, nil
 }
 
-func createWebhookService(context *clusterd.Context) error {
+func createWebhookService(ctx context.Context, context *clusterd.Context) error {
 	webhookService := corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      appName,
+			Name:      admissionControllerAppName,
 			Namespace: namespace,
 		},
 		Spec: corev1.ServiceSpec{
 			Ports: []corev1.ServicePort{
 				{
-					Port: servicePort,
+					Port: tlsPort,
 					TargetPort: intstr.IntOrString{
-						IntVal: serverPort,
+						IntVal: int32(webhook.DefaultPort),
 					},
 				},
 			},
-
 			Selector: map[string]string{
-				k8sutil.AppAttr: appName,
+				k8sutil.AppAttr: "rook-ceph-operator",
 			},
 		},
 	}
 
-	_, err := k8sutil.CreateOrUpdateService(context.Clientset, namespace, &webhookService)
-	if err != nil && !apierrors.IsAlreadyExists(err) {
+	_, err := k8sutil.CreateOrUpdateService(ctx, context.Clientset, namespace, &webhookService)
+	if err != nil {
 		return err
 	}
-	return nil
-}
-
-// StartControllerIfSecretPresent will initialize the webhook if secret is detected
-func StartControllerIfSecretPresent(ctx context.Context, context *clusterd.Context, admissionImage string) error {
-	isPresent, err := isSecretPresent(ctx, context)
-	if err != nil {
-		return errors.Wrap(err, "failed to retrieve secret")
-	}
-	if isPresent {
-		err = initWebhook(ctx, context, admissionImage)
-		if err != nil {
-			return errors.Wrap(err, "failed to initialize webhook")
-		}
-	}
-	return nil
-}
-
-func initWebhook(ctx context.Context, context *clusterd.Context, admissionImage string) error {
-	// At this point volume should be mounted, so proceed with creating the service and validatingwebhookconfig
-	err := createWebhookService(context)
-	if err != nil {
-		return errors.Wrap(err, "failed to create service")
-	}
-	err = createWebhookDeployment(ctx, context, admissionImage)
-	if err != nil {
-		return errors.Wrap(err, "failed to create deployment")
-	}
-	return nil
-}
-
-func createWebhookDeployment(ctx context.Context, context *clusterd.Context, admissionImage string) error {
-	logger.Info("creating admission controller pods")
-	admission_parameters := []string{"ceph",
-		"admission-controller"}
-	secretVolume := getSecretVolume()
-	secretVolumeMount := getSecretVolumeMount()
-
-	antiAffinity := csi.GetPodAntiAffinity(k8sutil.AppAttr, appName)
-	admissionControllerDeployment := getDeployment(ctx, context, secretVolume, antiAffinity, admissionImage, admission_parameters, secretVolumeMount)
-
-	_, err := k8sutil.CreateOrUpdateDeployment(context.Clientset, &admissionControllerDeployment)
-	if err != nil {
-		return errors.Wrap(err, "failed to create admission-controller deployment")
-	}
 
 	return nil
-}
-
-func getDeployment(ctx context.Context, context *clusterd.Context, secretVolume corev1.Volume, antiAffinity corev1.PodAntiAffinity,
-	admissionImage string, admission_parameters []string, secretVolumeMount corev1.VolumeMount) v1.Deployment {
-	var replicas int32 = 2
-	nodes, err := context.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err == nil {
-		if len(nodes.Items) == 1 {
-			replicas = 1
-		}
-	} else {
-		logger.Errorf("failed to get nodes. Defaulting the number of replicas of admission controller pods to 2. %v", err)
-	}
-
-	admissionControllerDeployment := v1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      appName,
-			Namespace: namespace,
-		},
-		Spec: v1.DeploymentSpec{
-			Replicas: &replicas,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{
-					k8sutil.AppAttr: appName,
-				},
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      appName,
-					Namespace: namespace,
-					Labels: map[string]string{
-						k8sutil.AppAttr: appName,
-					},
-				},
-				Spec: corev1.PodSpec{
-					Volumes: []corev1.Volume{
-						secretVolume,
-					},
-					Containers: []corev1.Container{
-						{
-							Name:  appName,
-							Image: admissionImage,
-							Args:  admission_parameters,
-							Ports: []corev1.ContainerPort{
-								{
-									Name:          portName,
-									ContainerPort: serverPort,
-								},
-							},
-							VolumeMounts: []corev1.VolumeMount{
-								secretVolumeMount,
-							},
-						},
-					},
-					ServiceAccountName: serviceAccountName,
-					Affinity: &corev1.Affinity{
-						PodAntiAffinity: &antiAffinity,
-						NodeAffinity:    getNodeAffinity(context.Clientset),
-					},
-					Tolerations: getTolerations(context.Clientset),
-				},
-			},
-		},
-	}
-	return admissionControllerDeployment
-}
-
-func getSecretVolumeMount() corev1.VolumeMount {
-	secretVolumeMount := corev1.VolumeMount{
-		Name:      secretVolumeName,
-		ReadOnly:  true,
-		MountPath: tlsDir,
-	}
-	return secretVolumeMount
-}
-
-func getSecretVolume() corev1.Volume {
-	secretVolume := corev1.Volume{
-		Name: secretVolumeName,
-		VolumeSource: corev1.VolumeSource{
-			Secret: &corev1.SecretVolumeSource{
-				SecretName: appName,
-			},
-		},
-	}
-	return secretVolume
-}
-
-func getTolerations(clientset kubernetes.Interface) []corev1.Toleration {
-	// Add toleration if any
-	tolerations := []corev1.Toleration{}
-	tolerationsRaw, err := k8sutil.GetOperatorSetting(clientset, controller.OperatorSettingConfigMapName, admissionControllerTolerationsEnv, "")
-	if err != nil {
-		logger.Warningf("toleration will be empty because failed to read the setting. %v", err)
-		return tolerations
-	}
-	tolerations, err = k8sutil.YamlToTolerations(tolerationsRaw)
-	if err != nil {
-		logger.Warningf("toleration will be empty because failed to parse the setting %q. %v", tolerationsRaw, err)
-		return tolerations
-	}
-	return tolerations
-}
-
-func getNodeAffinity(clientset kubernetes.Interface) *corev1.NodeAffinity {
-	// Add NodeAffinity if any
-	v1NodeAffinity := &corev1.NodeAffinity{}
-	nodeAffinity, err := k8sutil.GetOperatorSetting(clientset, controller.OperatorSettingConfigMapName, admissionControllerNodeAffinityEnv, "")
-	if err != nil {
-		// nodeAffinity will be empty by default in case of error
-		logger.Warningf("node affinity will be empty because failed to read the setting. %v", err)
-		return v1NodeAffinity
-	}
-	if nodeAffinity != "" {
-		v1NodeAffinity, err = k8sutil.GenerateNodeAffinity(nodeAffinity)
-		if err != nil {
-			logger.Warningf("node affinity will be empty because failed to parse the setting %q. %v", nodeAffinity, err)
-			return v1NodeAffinity
-		}
-	}
-	return v1NodeAffinity
 }

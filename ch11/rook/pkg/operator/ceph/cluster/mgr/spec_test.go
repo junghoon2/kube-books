@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
-	"github.com/rook/rook/pkg/apis/rook.io"
 	"github.com/rook/rook/pkg/clusterd"
 	"github.com/rook/rook/pkg/daemon/ceph/client"
 	cephclient "github.com/rook/rook/pkg/daemon/ceph/client"
@@ -41,7 +40,7 @@ func TestPodSpec(t *testing.T) {
 	clusterSpec := cephv1.ClusterSpec{
 		CephVersion:        cephv1.CephVersionSpec{Image: "quay.io/ceph/ceph:myceph"},
 		Dashboard:          cephv1.DashboardSpec{Port: 1234},
-		PriorityClassNames: map[rook.KeyType]string{cephv1.KeyMgr: "my-priority-class"},
+		PriorityClassNames: map[cephv1.KeyType]string{cephv1.KeyMgr: "my-priority-class"},
 		DataDirHostPath:    "/var/lib/rook/",
 		Resources: cephv1.ResourceSpec{string(cephv1.KeyMgr): v1.ResourceRequirements{
 			Limits: v1.ResourceList{
@@ -69,7 +68,7 @@ func TestPodSpec(t *testing.T) {
 
 		// Deployment should have Ceph labels
 		test.AssertLabelsContainCephRequirements(t, d.ObjectMeta.Labels,
-			config.MgrType, "a", AppName, "ns")
+			config.MgrType, "a", AppName, "ns", "test", "cephclusters.ceph.rook.io", "ceph-mgr")
 
 		podTemplate := test.NewPodTemplateSpecTester(t, &d.Spec.Template)
 		podTemplate.Spec().Containers().RequireAdditionalEnvVars(
@@ -77,7 +76,7 @@ func TestPodSpec(t *testing.T) {
 			"ROOK_CEPH_CLUSTER_CRD_NAME")
 		podTemplate.RunFullSuite(config.MgrType, "a", AppName, "ns", "quay.io/ceph/ceph:myceph",
 			"200", "100", "500", "250", /* resources */
-			"my-priority-class")
+			"my-priority-class", "test", "cephclusters.ceph.rook.io", "ceph-mgr")
 		assert.Equal(t, 2, len(d.Spec.Template.Annotations))
 		assert.Equal(t, 1, len(d.Spec.Template.Spec.Containers))
 		assert.Equal(t, 5, len(d.Spec.Template.Spec.Containers[0].VolumeMounts))
@@ -93,6 +92,18 @@ func TestPodSpec(t *testing.T) {
 		assert.Equal(t, 6, len(d.Spec.Template.Spec.Containers[1].VolumeMounts))                                                                                                          // + admin keyring
 		assert.Equal(t, "CEPH_ARGS", d.Spec.Template.Spec.Containers[1].Env[len(d.Spec.Template.Spec.Containers[1].Env)-1].Name)                                                          // connection info to the cluster
 		assert.Equal(t, "-m $(ROOK_CEPH_MON_HOST) -k /etc/ceph/admin-keyring-store/keyring", d.Spec.Template.Spec.Containers[1].Env[len(d.Spec.Template.Spec.Containers[1].Env)-1].Value) // connection info to the cluster
+	})
+
+	t.Run(("check mgr ConfigureProbe"), func(t *testing.T) {
+		c.spec.HealthCheck.StartupProbe = make(map[cephv1.KeyType]*cephv1.ProbeSpec)
+		c.spec.HealthCheck.StartupProbe[cephv1.KeyMgr] = &cephv1.ProbeSpec{Disabled: false, Probe: &v1.Probe{InitialDelaySeconds: 1000}}
+		c.spec.HealthCheck.LivenessProbe = make(map[cephv1.KeyType]*cephv1.ProbeSpec)
+		c.spec.HealthCheck.LivenessProbe[cephv1.KeyMgr] = &cephv1.ProbeSpec{Disabled: false, Probe: &v1.Probe{InitialDelaySeconds: 900}}
+		container := c.makeMgrDaemonContainer(&mgrTestConfig)
+		assert.NotNil(t, container.LivenessProbe)
+		assert.NotNil(t, container.StartupProbe)
+		assert.Equal(t, int32(900), container.LivenessProbe.InitialDelaySeconds)
+		assert.Equal(t, int32(1000), container.StartupProbe.InitialDelaySeconds)
 	})
 }
 
@@ -168,10 +179,10 @@ func TestApplyPrometheusAnnotations(t *testing.T) {
 	d, err = c.makeDeployment(&mgrTestConfig)
 	assert.NoError(t, err)
 
-	fakeAnnotations := rook.Annotations{
+	fakeAnnotations := cephv1.Annotations{
 		"foo.io/bar": "foobar",
 	}
-	c.spec.Annotations = map[rook.KeyType]rook.Annotations{cephv1.KeyMgr: fakeAnnotations}
+	c.spec.Annotations = map[cephv1.KeyType]cephv1.Annotations{cephv1.KeyMgr: fakeAnnotations}
 
 	c.applyPrometheusAnnotations(&d.ObjectMeta)
 	assert.Equal(t, 1, len(c.spec.Annotations))

@@ -1,56 +1,26 @@
-# Major Themes
-
-v1.7...
-
-## K8s Version Support
-
-## Upgrade Guides
+# v1.9 Pending Release Notes
 
 ## Breaking Changes
 
-### Ceph
-
-- The Operator configuration option `ROOK_ALLOW_MULTIPLE_FILESYSTEMS` has been removed in favor of simply verifying the Ceph version is at least Pacific.
-Multiple filesystems are stable since Ceph Pacific.
-So users who had `ROOK_ALLOW_MULTIPLE_FILESYSTEMS` enabled will need to update their Ceph version to Pacific.
+* The MDS liveness and startup probes are now configured by the CephFilesystem CR instead of the
+  CephCluster CR. To apply the MDS probes, they need to be specified in the CephFilesystem CR. See the
+  [CephFilesystem doc](Documentation/ceph-filesystem-crd.md#metadata-server-settings) for more details. See #9550
+* In the Helm charts, all Ceph components now have default values for the pod resources. The values
+  can be modified or removed in values.yaml depending on cluster requirements.
+* Prometheus rules are installed by the Helm chart. If you were relying on the cephcluster setting
+  `monitoring.enabled` to create the prometheus rules, they now  need to be enabled by setting
+  `monitoring.createPrometheusRules` in the Helm chart values.
+* Remove the obsolete cross build container, now unused by the CI
 
 ## Features
 
-### Core
-
-### Ceph
-
-- Official Ceph images have moved from docker.io to quay.io. Users running tags like `v14.2`, `v15.2`, `v16.2` must change the registry URL.
-So the CephCLuster spec field `image` must be updated to point to quay, like `image: quay.io/ceph/ceph:v16.2`.
-- Add user data protection when deleting Rook-Ceph Custom Resources
-  - A CephCluster will not be deleted if there are any other Rook-Ceph Custom resources referencing
-    it with the assumption that they are using the underlying Ceph cluster.
-  - A CephObjectStore will not be deleted if there is a bucket present. In addition to protection
-    from deletion when users have data in the store, this implicitly protects these resources from
-    being deleted when there is a referencing ObjectBucketClaim present.
-  - See [the design](https://github.com/rook/rook/blob/master/design/ceph/resource-dependencies.md)
-    for detailed information.
-- Add support for creating Hybrid Storage Pools
-  - Hybrid storage pool helps to create hybrid crush rule for choosing primary OSD for high performance
-    devices (ssd, nvme, etc) and remaining OSD for low performance devices (hdd).
-  - See [the design](Documentation/ceph-pool-crd.md#hybrid-storage-pools) for more details.
-  - Checkout the [ceph docs](https://docs.ceph.com/en/latest/rados/operations/crush-map/#custom-crush-rules)
-    for detailed information.
-- Add support cephfs mirroring peer configuration, refer to the [configuration](Documentation/ceph-filesystem-crd.md#mirroring) for more details
-- Add support for Kubernetes TLS secret for referring TLS certs needed for ceph RGW server.
-- Stretch clusters are considered stable
-  - Ceph v16.2.5 or greater is required for stretch clusters
-- The use of peer secret names in CephRBDMirror is deprecated. Please use CephBlockPool CR to configure peer secret names and import peers. Checkout the `mirroring` section in the CephBlockPool [spec](Documentation/ceph-pool-crd.md#spec) for more details.
-- Update Ceph CSI to `v3.4.0` for more details read the [official release note](https://github.com/ceph/ceph-csi/releases/tag/v3.4.0)
-
-### Cassandra
-
-- CRDs converted from v1beta1 to v1
-  - Schema is generated from the internal types for more complete validation
-  - Minimum K8s version for the v1 CRDs is K8s 1.16
-
-### NFS
-
-- CRDs converted from v1beta1 to v1
-  - Schema is generated from the internal types for more complete validation
-  - Minimum K8s version for the v1 CRDs is K8s 1.16
+* The number of mgr daemons for example clusters is increased to 2 from 1, resulting in a standby
+  mgr daemon. If the active mgr goes down, Ceph will update the passive mgr to be active, and rook
+  will update all the services with the label app=rook-ceph-mgr to direct traffic to the new active
+  mgr.
+* Network encryption is configurable with settings in the CephCluster CR. Requires the 5.11 kernel or newer.
+* Network compression is configurable with settings in the CephCluster CR. Requires Ceph Quincy (v17) or newer.
+* Added support for custom ceph.conf for csi pods. See #9567
+* Added and updated many Ceph prometheus rules as recommended the main Ceph project.
+* Added service account rook-ceph-rgw for the RGW pods.
+* Added new RadosNamespace resource: create rados namespaces in a CephBlockPool. See #9733

@@ -20,6 +20,12 @@ package v1
 
 type CephBlockPoolExpansion interface{}
 
+type CephBlockPoolRadosNamespaceExpansion interface{}
+
+type CephBucketNotificationExpansion interface{}
+
+type CephBucketTopicExpansion interface{}
+
 type CephClientExpansion interface{}
 
 type CephClusterExpansion interface{}
@@ -27,6 +33,8 @@ type CephClusterExpansion interface{}
 type CephFilesystemExpansion interface{}
 
 type CephFilesystemMirrorExpansion interface{}
+
+type CephFilesystemSubVolumeGroupExpansion interface{}
 
 type CephNFSExpansion interface{}
 

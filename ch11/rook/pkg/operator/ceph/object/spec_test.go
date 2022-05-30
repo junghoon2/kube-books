@@ -23,7 +23,6 @@ import (
 
 	"github.com/pkg/errors"
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
-	"github.com/rook/rook/pkg/apis/rook.io"
 	"github.com/rook/rook/pkg/clusterd"
 	"github.com/rook/rook/pkg/daemon/ceph/client"
 	clienttest "github.com/rook/rook/pkg/daemon/ceph/client/test"
@@ -36,6 +35,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 func TestPodSpecs(t *testing.T) {
@@ -52,7 +52,7 @@ func TestPodSpecs(t *testing.T) {
 	}
 	store.Spec.Gateway.PriorityClassName = "my-priority-class"
 	info := clienttest.CreateTestClusterInfo(1)
-	info.CephVersion = cephver.Nautilus
+	info.CephVersion = cephver.Octopus
 	data := cephconfig.NewStatelessDaemonDataPathMap(cephconfig.RgwType, "default", "rook-ceph", "/var/lib/rook/")
 
 	c := &clusterConfig{
@@ -71,6 +71,7 @@ func TestPodSpecs(t *testing.T) {
 	resourceName := fmt.Sprintf("%s-%s", AppName, c.store.Name)
 	rgwConfig := &rgwConfig{
 		ResourceName: resourceName,
+		DaemonID:     "default",
 	}
 
 	s, err := c.makeRGWPodSpec(rgwConfig)
@@ -87,7 +88,18 @@ func TestPodSpecs(t *testing.T) {
 	podTemplate := cephtest.NewPodTemplateSpecTester(t, &s)
 	podTemplate.RunFullSuite(cephconfig.RgwType, "default", "rook-ceph-rgw", "mycluster", "quay.io/ceph/ceph:myversion",
 		"200", "100", "1337", "500", /* resources */
-		"my-priority-class")
+		"my-priority-class", "default", "cephobjectstores.ceph.rook.io", "ceph-rgw")
+
+	t.Run(("check rgw ConfigureProbe"), func(t *testing.T) {
+		c.store.Spec.HealthCheck.StartupProbe = &cephv1.ProbeSpec{Disabled: false, Probe: &v1.Probe{InitialDelaySeconds: 1000}}
+		c.store.Spec.HealthCheck.LivenessProbe = &cephv1.ProbeSpec{Disabled: false, Probe: &v1.Probe{InitialDelaySeconds: 900}}
+		deployment := c.makeDaemonContainer(rgwConfig)
+		assert.NotNil(t, deployment)
+		assert.NotNil(t, c.store.Spec.HealthCheck.LivenessProbe)
+		assert.NotNil(t, c.store.Spec.HealthCheck.StartupProbe)
+		assert.Equal(t, int32(900), deployment.LivenessProbe.InitialDelaySeconds)
+		assert.Equal(t, int32(1000), deployment.StartupProbe.InitialDelaySeconds)
+	})
 }
 
 func TestSSLPodSpec(t *testing.T) {
@@ -108,7 +120,7 @@ func TestSSLPodSpec(t *testing.T) {
 	}
 	store.Spec.Gateway.PriorityClassName = "my-priority-class"
 	info := clienttest.CreateTestClusterInfo(1)
-	info.CephVersion = cephver.Nautilus
+	info.CephVersion = cephver.Octopus
 	info.Namespace = store.Namespace
 	data := cephconfig.NewStatelessDaemonDataPathMap(cephconfig.RgwType, "default", "rook-ceph", "/var/lib/rook/")
 	store.Spec.Gateway.SecurePort = 443
@@ -130,6 +142,7 @@ func TestSSLPodSpec(t *testing.T) {
 	resourceName := fmt.Sprintf("%s-%s", AppName, c.store.Name)
 	rgwConfig := &rgwConfig{
 		ResourceName: resourceName,
+		DaemonID:     "default",
 	}
 	_, err := c.makeRGWPodSpec(rgwConfig)
 	// No TLS certs specified, will return error
@@ -158,7 +171,7 @@ func TestSSLPodSpec(t *testing.T) {
 	podTemplate := cephtest.NewPodTemplateSpecTester(t, &s)
 	podTemplate.RunFullSuite(cephconfig.RgwType, "default", "rook-ceph-rgw", "mycluster", "quay.io/ceph/ceph:myversion",
 		"200", "100", "1337", "500", /* resources */
-		"my-priority-class")
+		"my-priority-class", "default", "cephobjectstores.ceph.rook.io", "ceph-rgw")
 	// TLS Secret
 	c.store.Spec.Gateway.SSLCertificateRef = "tlscert"
 	rgwtlssecret = &v1.Secret{
@@ -182,10 +195,10 @@ func TestSSLPodSpec(t *testing.T) {
 	podTemplate = cephtest.NewPodTemplateSpecTester(t, &s)
 	podTemplate.RunFullSuite(cephconfig.RgwType, "default", "rook-ceph-rgw", "mycluster", "quay.io/ceph/ceph:myversion",
 		"200", "100", "1337", "500", /* resources */
-		"my-priority-class")
+		"my-priority-class", "default", "cephobjectstores.ceph.rook.io", "ceph-rgw")
 	// Using service serving cert
 	c.store.Spec.Gateway.SSLCertificateRef = ""
-	c.store.Spec.Gateway.Service = &(cephv1.RGWServiceSpec{Annotations: rook.Annotations{cephv1.ServiceServingCertKey: "rgw-cert"}})
+	c.store.Spec.Gateway.Service = &(cephv1.RGWServiceSpec{Annotations: cephv1.Annotations{cephv1.ServiceServingCertKey: "rgw-cert"}})
 	secretVolSrc, err = c.generateVolumeSourceWithTLSSecret()
 	assert.NoError(t, err)
 	assert.Equal(t, secretVolSrc.SecretName, "rgw-cert")
@@ -212,7 +225,7 @@ func TestSSLPodSpec(t *testing.T) {
 	podTemplate = cephtest.NewPodTemplateSpecTester(t, &s)
 	podTemplate.RunFullSuite(cephconfig.RgwType, "default", "rook-ceph-rgw", "mycluster", "quay.io/ceph/ceph:myversion",
 		"200", "100", "1337", "500", /* resources */
-		"my-priority-class")
+		"my-priority-class", "default", "cephobjectstores.ceph.rook.io", "ceph-rgw")
 
 	assert.True(t, s.Spec.HostNetwork)
 	assert.Equal(t, v1.DNSClusterFirstWithHostNet, s.Spec.DNSPolicy)
@@ -283,7 +296,7 @@ func TestValidateSpec(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func TestGenerateLiveProbe(t *testing.T) {
+func TestDefaultLivenessProbe(t *testing.T) {
 	store := simpleStore()
 	c := &clusterConfig{
 		store: store,
@@ -294,91 +307,265 @@ func TestGenerateLiveProbe(t *testing.T) {
 		},
 	}
 
+	desiredProbe := &v1.Probe{
+		ProbeHandler: v1.ProbeHandler{
+			TCPSocket: &v1.TCPSocketAction{
+				Port: intstr.FromInt(8080),
+			},
+		},
+		InitialDelaySeconds: 10,
+	}
 	// No SSL - HostNetwork is disabled - using internal port
-	p := c.generateLiveProbe()
-	assert.Equal(t, int32(8080), p.Handler.HTTPGet.Port.IntVal)
-	assert.Equal(t, v1.URISchemeHTTP, p.Handler.HTTPGet.Scheme)
+	p := c.defaultLivenessProbe()
+	assert.Equal(t, desiredProbe, p)
 
 	// No SSL - HostNetwork is enabled
 	c.store.Spec.Gateway.Port = 123
 	c.store.Spec.Gateway.SecurePort = 0
 	c.clusterSpec.Network.HostNetwork = true
-	p = c.generateLiveProbe()
-	assert.Equal(t, int32(123), p.Handler.HTTPGet.Port.IntVal)
+	p = c.defaultLivenessProbe()
+	desiredProbe.ProbeHandler.TCPSocket.Port = intstr.FromInt(123)
+	assert.Equal(t, desiredProbe, p)
 
 	// SSL - HostNetwork is enabled
 	c.store.Spec.Gateway.Port = 0
 	c.store.Spec.Gateway.SecurePort = 321
 	c.store.Spec.Gateway.SSLCertificateRef = "foo"
-	p = c.generateLiveProbe()
-	assert.Equal(t, int32(321), p.Handler.HTTPGet.Port.IntVal)
+	p = c.defaultLivenessProbe()
+	desiredProbe.ProbeHandler.TCPSocket.Port = intstr.FromInt(321)
+	assert.Equal(t, desiredProbe, p)
 
 	// Both Non-SSL and SSL are enabled
-	// liveprobe just on Non-SSL
+	// livenessProbe just on Non-SSL
 	c.store.Spec.Gateway.Port = 123
 	c.store.Spec.Gateway.SecurePort = 321
+	p = c.defaultLivenessProbe()
+	desiredProbe.ProbeHandler.TCPSocket.Port = intstr.FromInt(123)
+	assert.Equal(t, desiredProbe, p)
+}
+
+func TestDefaultStartupProbe(t *testing.T) {
+	store := simpleStore()
+	c := &clusterConfig{
+		store: store,
+		clusterSpec: &cephv1.ClusterSpec{
+			Network: cephv1.NetworkSpec{
+				HostNetwork: false,
+			},
+		},
+	}
+
+	desiredProbe := &v1.Probe{
+		ProbeHandler: v1.ProbeHandler{
+			TCPSocket: &v1.TCPSocketAction{
+				Port: intstr.FromInt(8080),
+			},
+		},
+		InitialDelaySeconds: 10,
+		PeriodSeconds:       10,
+		FailureThreshold:    18,
+	}
+	// No SSL - HostNetwork is disabled - using internal port
+	p := c.defaultStartupProbe()
+	assert.Equal(t, desiredProbe, p)
+
+	// No SSL - HostNetwork is enabled
+	c.store.Spec.Gateway.Port = 123
+	c.store.Spec.Gateway.SecurePort = 0
+	c.clusterSpec.Network.HostNetwork = true
+	p = c.defaultStartupProbe()
+	desiredProbe.ProbeHandler.TCPSocket.Port = intstr.FromInt(123)
+	assert.Equal(t, desiredProbe, p)
+
+	// SSL - HostNetwork is enabled
+	c.store.Spec.Gateway.Port = 0
+	c.store.Spec.Gateway.SecurePort = 321
 	c.store.Spec.Gateway.SSLCertificateRef = "foo"
-	p = c.generateLiveProbe()
-	assert.Equal(t, v1.URISchemeHTTP, p.Handler.HTTPGet.Scheme)
-	assert.Equal(t, int32(123), p.Handler.HTTPGet.Port.IntVal)
+	p = c.defaultStartupProbe()
+	desiredProbe.ProbeHandler.TCPSocket.Port = intstr.FromInt(321)
+	assert.Equal(t, desiredProbe, p)
+
+	// Both Non-SSL and SSL are enabled
+	// livenessProbe just on Non-SSL
+	c.store.Spec.Gateway.Port = 123
+	c.store.Spec.Gateway.SecurePort = 321
+	p = c.defaultStartupProbe()
+	desiredProbe.ProbeHandler.TCPSocket.Port = intstr.FromInt(123)
+	assert.Equal(t, desiredProbe, p)
+}
+
+func TestDefaultReadinessProbe(t *testing.T) {
+	store := simpleStore()
+	c := &clusterConfig{
+		store: store,
+		clusterSpec: &cephv1.ClusterSpec{
+			Network: cephv1.NetworkSpec{
+				HostNetwork: false,
+			},
+		},
+	}
+
+	desiredProbe := &v1.Probe{
+		ProbeHandler: v1.ProbeHandler{
+			HTTPGet: &v1.HTTPGetAction{
+				Path:   readinessProbePath,
+				Port:   intstr.FromInt(8080),
+				Scheme: v1.URISchemeHTTP,
+			},
+		},
+		InitialDelaySeconds: 10,
+	}
+	// No SSL - HostNetwork is disabled - using internal port
+	p := c.defaultReadinessProbe()
+	assert.Equal(t, desiredProbe, p)
+
+	// No SSL - HostNetwork is enabled
+	c.store.Spec.Gateway.Port = 123
+	c.store.Spec.Gateway.SecurePort = 0
+	c.clusterSpec.Network.HostNetwork = true
+	p = c.defaultReadinessProbe()
+	desiredProbe.ProbeHandler.HTTPGet.Port = intstr.FromInt(123)
+	assert.Equal(t, desiredProbe, p)
+
+	// SSL - HostNetwork is enabled
+	c.store.Spec.Gateway.Port = 0
+	c.store.Spec.Gateway.SecurePort = 321
+	c.store.Spec.Gateway.SSLCertificateRef = "foo"
+	p = c.defaultReadinessProbe()
+	desiredProbe.ProbeHandler.HTTPGet.Port = intstr.FromInt(321)
+	desiredProbe.ProbeHandler.HTTPGet.Scheme = v1.URISchemeHTTPS
+	assert.Equal(t, desiredProbe, p)
+
+	// Both Non-SSL and SSL are enabled
+	// readinessProbe just on Non-SSL
+	c.store.Spec.Gateway.Port = 123
+	c.store.Spec.Gateway.SecurePort = 321
+	p = c.defaultReadinessProbe()
+	desiredProbe.ProbeHandler.HTTPGet.Port = intstr.FromInt(123)
+	desiredProbe.ProbeHandler.HTTPGet.Scheme = v1.URISchemeHTTP
+	assert.Equal(t, desiredProbe, p)
 }
 
 func TestCheckRGWKMS(t *testing.T) {
 	ctx := context.TODO()
-	// Placeholder
-	context := &clusterd.Context{Clientset: test.New(t, 3)}
-	store := simpleStore()
-	store.Spec.Security = &cephv1.SecuritySpec{KeyManagementService: cephv1.KeyManagementServiceSpec{ConnectionDetails: map[string]string{}}}
-	c := &clusterConfig{
-		context: context,
-		store:   store,
+	setupTest := func() *clusterConfig {
+		context := &clusterd.Context{Clientset: test.New(t, 3)}
+		store := simpleStore()
+		store.Spec.Security = &cephv1.SecuritySpec{KeyManagementService: cephv1.KeyManagementServiceSpec{ConnectionDetails: map[string]string{}}}
+		return &clusterConfig{
+			context:     context,
+			store:       store,
+			clusterInfo: &client.ClusterInfo{Context: ctx},
+		}
+	}
+	configureKMS := func(c *clusterConfig) {
+		c.store.Spec.Security.KeyManagementService.TokenSecretName = "vault-token"
+		c.store.Spec.Security.KeyManagementService.ConnectionDetails["KMS_PROVIDER"] = "vault"
+		c.store.Spec.Security.KeyManagementService.ConnectionDetails["VAULT_ADDR"] = "https://1.1.1.1:8200"
+		s := &v1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      c.store.Spec.Security.KeyManagementService.TokenSecretName,
+				Namespace: c.store.Namespace,
+			},
+			Data: map[string][]byte{
+				"token": []byte("myt-otkenbenvqrev"),
+			},
+		}
+		_, err := c.context.Clientset.CoreV1().Secrets(c.store.Namespace).Create(ctx, s, metav1.CreateOptions{})
+		assert.NoError(t, err)
 	}
 
-	// without KMS
-	b, err := c.CheckRGWKMS()
-	assert.False(t, b)
-	assert.NoError(t, err)
+	t.Run("KMS is disabled", func(t *testing.T) {
+		c := setupTest()
+		b, err := c.CheckRGWKMS()
+		assert.False(t, b)
+		assert.NoError(t, err)
+	})
 
-	// setting KMS configurations
-	c.store.Spec.Security.KeyManagementService.TokenSecretName = "vault-token"
-	c.store.Spec.Security.KeyManagementService.ConnectionDetails["KMS_PROVIDER"] = "vault"
-	c.store.Spec.Security.KeyManagementService.ConnectionDetails["VAULT_ADDR"] = "https://1.1.1.1:8200"
-	s := &v1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      store.Spec.Security.KeyManagementService.TokenSecretName,
-			Namespace: store.Namespace,
-		},
-		Data: map[string][]byte{
-			"token": []byte("myt-otkenbenvqrev"),
-		},
-	}
-	_, err = context.Clientset.CoreV1().Secrets(store.Namespace).Create(ctx, s, metav1.CreateOptions{})
-	assert.NoError(t, err)
+	t.Run("Vault Secret Engine is missing", func(t *testing.T) {
+		c := setupTest()
+		configureKMS(c)
+		b, err := c.CheckRGWKMS()
+		assert.False(t, b)
+		assert.Error(t, err)
+	})
 
-	// no secret engine set, will fail
-	b, err = c.CheckRGWKMS()
-	assert.False(t, b)
-	assert.Error(t, err)
+	t.Run("Vault Secret Engine is kv with v1", func(t *testing.T) {
+		c := setupTest()
+		configureKMS(c)
+		c.store.Spec.Security.KeyManagementService.ConnectionDetails["VAULT_SECRET_ENGINE"] = "kv"
+		b, err := c.CheckRGWKMS()
+		assert.False(t, b)
+		assert.Error(t, err)
+	})
 
-	// kv engine version v1, will fail
-	c.store.Spec.Security.KeyManagementService.ConnectionDetails["VAULT_SECRET_ENGINE"] = "kv"
-	c.store.Spec.Security.KeyManagementService.ConnectionDetails["VAULT_BACKEND"] = "v1"
-	b, err = c.CheckRGWKMS()
-	assert.False(t, b)
-	assert.Error(t, err)
+	t.Run("Vault Secret Engine is kv with v2", func(t *testing.T) {
+		c := setupTest()
+		configureKMS(c)
+		c.store.Spec.Security.KeyManagementService.ConnectionDetails["VAULT_SECRET_ENGINE"] = "kv"
+		c.store.Spec.Security.KeyManagementService.ConnectionDetails["VAULT_BACKEND"] = "v2"
+		b, err := c.CheckRGWKMS()
+		assert.True(t, b)
+		assert.NoError(t, err)
+	})
 
-	// kv engine version v2, will pass
-	c.store.Spec.Security.KeyManagementService.ConnectionDetails["VAULT_BACKEND"] = "v2"
-	b, err = c.CheckRGWKMS()
-	assert.True(t, b)
-	assert.NoError(t, err)
+	t.Run("Vault Secret Engine is transit", func(t *testing.T) {
+		c := setupTest()
+		configureKMS(c)
+		c.store.Spec.Security.KeyManagementService.ConnectionDetails["VAULT_SECRET_ENGINE"] = "transit"
+		b, err := c.CheckRGWKMS()
+		assert.True(t, b)
+		assert.NoError(t, err)
+	})
 
-	// transit engine, will pass
-	c.store.Spec.Security.KeyManagementService.ConnectionDetails["VAULT_SECRET_ENGINE"] = "transit"
-	c.store.Spec.Security.KeyManagementService.ConnectionDetails["VAULT_BACKEND"] = ""
-	b, err = c.CheckRGWKMS()
-	assert.True(t, b)
-	assert.NoError(t, err)
+	t.Run("TLS is configured but secrets do not exist", func(t *testing.T) {
+		c := setupTest()
+		configureKMS(c)
+		c.store.Spec.Security.KeyManagementService.ConnectionDetails["VAULT_SECRET_ENGINE"] = "transit"
+		c.store.Spec.Security.KeyManagementService.ConnectionDetails["VAULT_CACERT"] = "vault-ca-secret"
+		b, err := c.CheckRGWKMS()
+		assert.False(t, b)
+		assert.Error(t, err, "")
+		assert.EqualError(t, err, "failed to validate vault connection details: failed to find TLS connection details k8s secret \"vault-ca-secret\"")
+	})
+
+	t.Run("TLS secret exists but empty key", func(t *testing.T) {
+		c := setupTest()
+		configureKMS(c)
+		c.store.Spec.Security.KeyManagementService.ConnectionDetails["VAULT_SECRET_ENGINE"] = "transit"
+		c.store.Spec.Security.KeyManagementService.ConnectionDetails["VAULT_CACERT"] = "vault-ca-secret"
+		tlsSecret := &v1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "vault-ca-secret",
+				Namespace: c.store.Namespace,
+			},
+		}
+		_, err := c.context.Clientset.CoreV1().Secrets(c.store.Namespace).Create(context.TODO(), tlsSecret, metav1.CreateOptions{})
+		assert.NoError(t, err)
+		b, err := c.CheckRGWKMS()
+		assert.False(t, b)
+		assert.Error(t, err, "")
+		assert.EqualError(t, err, "failed to validate vault connection details: failed to find TLS connection key \"cert\" for \"VAULT_CACERT\" in k8s secret \"vault-ca-secret\"")
+	})
+
+	t.Run("TLS config is valid", func(t *testing.T) {
+		c := setupTest()
+		configureKMS(c)
+		c.store.Spec.Security.KeyManagementService.ConnectionDetails["VAULT_SECRET_ENGINE"] = "transit"
+		c.store.Spec.Security.KeyManagementService.ConnectionDetails["VAULT_CACERT"] = "vault-ca-secret"
+		tlsSecret := &v1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "vault-ca-secret",
+				Namespace: c.store.Namespace,
+			},
+		}
+		tlsSecret.Data = map[string][]byte{"cert": []byte("envnrevbnbvsbjkrtn")}
+		_, err := c.context.Clientset.CoreV1().Secrets(c.store.Namespace).Create(context.TODO(), tlsSecret, metav1.CreateOptions{})
+		assert.NoError(t, err)
+		b, err := c.CheckRGWKMS()
+		assert.True(t, b)
+		assert.NoError(t, err, "")
+	})
 }
 
 func TestGetDaemonName(t *testing.T) {

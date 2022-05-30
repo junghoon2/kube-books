@@ -43,7 +43,7 @@ const (
 	dashboardPortHTTPS  = 8443
 	dashboardPortHTTP   = 7000
 	dashboardUsername   = "admin"
-	// #nosec because of the word `Password`
+	//nolint:gosec // because of the word `Password`
 	dashboardPasswordName          = "rook-ceph-dashboard-password"
 	passwordLength                 = 20
 	passwordKeyName                = "password"
@@ -56,19 +56,18 @@ var (
 )
 
 func (c *Cluster) configureDashboardService(activeDaemon string) error {
-	ctx := context.TODO()
 	dashboardService, err := c.makeDashboardService(AppName, activeDaemon)
 	if err != nil {
 		return err
 	}
 	if c.spec.Dashboard.Enabled {
 		// expose the dashboard service
-		if _, err := k8sutil.CreateOrUpdateService(c.context.Clientset, c.clusterInfo.Namespace, dashboardService); err != nil {
+		if _, err := k8sutil.CreateOrUpdateService(c.clusterInfo.Context, c.context.Clientset, c.clusterInfo.Namespace, dashboardService); err != nil {
 			return errors.Wrap(err, "failed to configure dashboard svc")
 		}
 	} else {
 		// delete the dashboard service if it exists
-		err := c.context.Clientset.CoreV1().Services(c.clusterInfo.Namespace).Delete(ctx, dashboardService.Name, metav1.DeleteOptions{})
+		err := c.context.Clientset.CoreV1().Services(c.clusterInfo.Namespace).Delete(c.clusterInfo.Context, dashboardService.Name, metav1.DeleteOptions{})
 		if err != nil && !kerrors.IsNotFound(err) {
 			return errors.Wrap(err, "failed to delete dashboard service")
 		}
@@ -209,8 +208,7 @@ func (c *Cluster) createSelfSignedCert() (bool, error) {
 
 // FileBasedPasswordSupported check if Ceph versions have the latest Ceph dashboard command
 func FileBasedPasswordSupported(c *client.ClusterInfo) bool {
-	if (c.CephVersion.IsNautilus() && c.CephVersion.IsAtLeast(cephver.CephVersion{Major: 14, Minor: 2, Extra: 17})) ||
-		(c.CephVersion.IsOctopus() && c.CephVersion.IsAtLeast(cephver.CephVersion{Major: 15, Minor: 2, Extra: 10})) ||
+	if (c.CephVersion.IsOctopus() && c.CephVersion.IsAtLeast(cephver.CephVersion{Major: 15, Minor: 2, Extra: 10})) ||
 		c.CephVersion.IsAtLeastPacific() {
 		return true
 	}
@@ -253,8 +251,7 @@ func (c *Cluster) setLoginCredentials(password string) error {
 }
 
 func (c *Cluster) getOrGenerateDashboardPassword() (string, error) {
-	ctx := context.TODO()
-	secret, err := c.context.Clientset.CoreV1().Secrets(c.clusterInfo.Namespace).Get(ctx, dashboardPasswordName, metav1.GetOptions{})
+	secret, err := c.context.Clientset.CoreV1().Secrets(c.clusterInfo.Namespace).Get(c.clusterInfo.Context, dashboardPasswordName, metav1.GetOptions{})
 	if err == nil {
 		logger.Info("the dashboard secret was already generated")
 		return decodeSecret(secret)
@@ -286,7 +283,7 @@ func (c *Cluster) getOrGenerateDashboardPassword() (string, error) {
 		return "", errors.Wrapf(err, "failed to set owner reference to dashboard secret %q", secret.Name)
 	}
 
-	_, err = c.context.Clientset.CoreV1().Secrets(c.clusterInfo.Namespace).Create(ctx, secret, metav1.CreateOptions{})
+	_, err = c.context.Clientset.CoreV1().Secrets(c.clusterInfo.Namespace).Create(c.clusterInfo.Context, secret, metav1.CreateOptions{})
 	if err != nil {
 		return "", errors.Wrap(err, "failed to save dashboard secret")
 	}
@@ -294,7 +291,7 @@ func (c *Cluster) getOrGenerateDashboardPassword() (string, error) {
 }
 
 func GeneratePassword(length int) (string, error) {
-	// #nosec because of the word password
+	//nolint:gosec // because of the word password
 	const passwordChars = "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
 	passwd, err := GenerateRandomBytes(length)
 	if err != nil {

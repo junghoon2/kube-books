@@ -9,7 +9,7 @@ indent: true
 
 [OpenShift](https://www.openshift.com/) adds a number of security and other enhancements to Kubernetes. In particular, [security context constraints](https://blog.openshift.com/understanding-service-accounts-sccs/) allow the cluster admin to define exactly which permissions are allowed to pods running in the cluster. You will need to define those permissions that allow the Rook pods to run.
 
-The settings for Rook in OpenShift are described below, and are also included in the [example yaml files](https://github.com/rook/rook/blob/{{ branchName }}/cluster/examples/kubernetes/ceph):
+The settings for Rook in OpenShift are described below, and are also included in the [example yaml files](https://github.com/rook/rook/blob/{{ branchName }}/deploy/examples):
 
 * `operator-openshift.yaml`: Creates the security context constraints and starts the operator deployment
 * `object-openshift.yaml`: Creates an object store with rgw listening on a valid port number for OpenShift
@@ -35,55 +35,9 @@ To orchestrate the storage platform, Rook requires the following access in the c
 
 ## Security Context Constraints
 
-Before starting the Rook operator or cluster, create the security context constraints needed by the Rook pods. The following yaml is found in `operator-openshift.yaml` under `/cluster/examples/kubernetes/ceph`.
+Before starting the Rook operator or cluster, create the security context constraints needed by the Rook pods. The following yaml is found in `operator-openshift.yaml` under `/deploy/examples`.
 
 > **NOTE**: Older versions of OpenShift may require `apiVersion: v1`.
-
-```yaml
-kind: SecurityContextConstraints
-apiVersion: security.openshift.io/v1
-metadata:
-  name: rook-ceph
-allowPrivilegedContainer: true
-allowHostNetwork: true
-allowHostDirVolumePlugin: true
-priority:
-allowedCapabilities: []
-allowHostPorts: false
-allowHostPID: true
-allowHostIPC: false
-readOnlyRootFilesystem: false
-requiredDropCapabilities: []
-defaultAddCapabilities: []
-runAsUser:
-  type: RunAsAny
-seLinuxContext:
-  type: MustRunAs
-fsGroup:
-  type: MustRunAs
-supplementalGroups:
-  type: RunAsAny
-allowedFlexVolumes:
-  - driver: "ceph.rook.io/rook"
-  - driver: "ceph.rook.io/rook-ceph"
-volumes:
-  - configMap
-  - downwardAPI
-  - emptyDir
-  - flexVolume
-  - hostPath
-  - persistentVolumeClaim
-  - projected
-  - secret
-users:
-  # A user needs to be added for each rook service account.
-  # This assumes running in the default sample "rook-ceph" namespace.
-  # If other namespaces or service accounts are configured, they need to be updated here.
-  - system:serviceaccount:rook-ceph:rook-ceph-system
-  - system:serviceaccount:rook-ceph:default
-  - system:serviceaccount:rook-ceph:rook-ceph-mgr
-  - system:serviceaccount:rook-ceph:rook-ceph-osd
-```
 
 Important to note is that if you plan on running Rook in namespaces other than the default `rook-ceph`, the example scc will need to be modified to accommodate for your namespaces where the Rook pods are running.
 

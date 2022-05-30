@@ -17,7 +17,6 @@ limitations under the License.
 package osd
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -73,8 +72,6 @@ func (c *updateConfig) doneUpdating() bool {
 }
 
 func (c *updateConfig) updateExistingOSDs(errs *provisionErrors) {
-	ctx := context.TODO()
-
 	if c.doneUpdating() {
 		return // no more OSDs to update
 	}
@@ -82,9 +79,10 @@ func (c *updateConfig) updateExistingOSDs(errs *provisionErrors) {
 
 	var osdIDs []int
 	var err error
-	if !shouldCheckOkToStopFunc(c.cluster.context, c.cluster.clusterInfo) {
+	if c.cluster.spec.SkipUpgradeChecks || !shouldCheckOkToStopFunc(c.cluster.context, c.cluster.clusterInfo) {
 		// If we should not check ok-to-stop, then only process one OSD at a time. There are likely
 		// less than 3 OSDs in the cluster or the cluster is on a single node. E.g., in CI :wink:.
+		logger.Infof("skipping osd checks for ok-to-stop")
 		osdIDs = []int{osdIDQuery}
 	} else {
 		osdIDs, err = cephclient.OSDOkToStop(c.cluster.context, c.cluster.clusterInfo, osdIDQuery, maxUpdatesInParallel)
@@ -117,7 +115,7 @@ func (c *updateConfig) updateExistingOSDs(errs *provisionErrors) {
 		}
 
 		depName := deploymentName(osdID)
-		dep, err := c.cluster.context.Clientset.AppsV1().Deployments(c.cluster.clusterInfo.Namespace).Get(ctx, depName, metav1.GetOptions{})
+		dep, err := c.cluster.context.Clientset.AppsV1().Deployments(c.cluster.clusterInfo.Namespace).Get(c.cluster.clusterInfo.Context, depName, metav1.GetOptions{})
 		if err != nil {
 			errs.addError("failed to update OSD %d. failed to find existing deployment %q. %v", osdID, depName, err)
 			continue
@@ -129,7 +127,9 @@ func (c *updateConfig) updateExistingOSDs(errs *provisionErrors) {
 		}
 
 		// backward compatibility for old deployments
-		if osdInfo.DeviceClass == "" {
+		// Checking DeviceClass with None too, because ceph-volume lvm list return crush device class as None
+		// Tracker https://tracker.ceph.com/issues/53425
+		if osdInfo.DeviceClass == "" || osdInfo.DeviceClass == "None" {
 			deviceClassInfo, err := cephclient.OSDDeviceClasses(c.cluster.context, c.cluster.clusterInfo, []string{strconv.Itoa(osdID)})
 			if err != nil {
 				logger.Errorf("failed to get device class for existing deployment %q. %v", depName, err)
@@ -150,7 +150,7 @@ func (c *updateConfig) updateExistingOSDs(errs *provisionErrors) {
 			updatedDep, err = deploymentOnPVCFunc(c.cluster, osdInfo, nodeOrPVCName, c.provisionConfig)
 
 			message := fmt.Sprintf("Processing OSD %d on PVC %q", osdID, nodeOrPVCName)
-			updateConditionFunc(c.cluster.context, c.cluster.clusterInfo.NamespacedName(), cephv1.ConditionProgressing, v1.ConditionTrue, cephv1.ClusterProgressingReason, message)
+			updateConditionFunc(c.cluster.clusterInfo.Context, c.cluster.context, c.cluster.clusterInfo.NamespacedName(), k8sutil.ObservedGenerationNotAvailable, cephv1.ConditionProgressing, v1.ConditionTrue, cephv1.ClusterProgressingReason, message)
 		} else {
 			if !c.cluster.ValidStorage.NodeExists(nodeOrPVCName) {
 				// node will not reconcile, so don't update the deployment
@@ -167,7 +167,7 @@ func (c *updateConfig) updateExistingOSDs(errs *provisionErrors) {
 			updatedDep, err = deploymentOnNodeFunc(c.cluster, osdInfo, nodeOrPVCName, c.provisionConfig)
 
 			message := fmt.Sprintf("Processing OSD %d on node %q", osdID, nodeOrPVCName)
-			updateConditionFunc(c.cluster.context, c.cluster.clusterInfo.NamespacedName(), cephv1.ConditionProgressing, v1.ConditionTrue, cephv1.ClusterProgressingReason, message)
+			updateConditionFunc(c.cluster.clusterInfo.Context, c.cluster.context, c.cluster.clusterInfo.NamespacedName(), k8sutil.ObservedGenerationNotAvailable, cephv1.ConditionProgressing, v1.ConditionTrue, cephv1.ClusterProgressingReason, message)
 		}
 		if err != nil {
 			errs.addError("%v", errors.Wrapf(err, "failed to update OSD %d", osdID))
@@ -181,7 +181,7 @@ func (c *updateConfig) updateExistingOSDs(errs *provisionErrors) {
 	// when waiting on deployments to be updated, only list OSDs we intend to update specifically by ID
 	listFunc := c.cluster.getFuncToListDeploymentsWithIDs(listIDs)
 
-	failures := updateMultipleDeploymentsAndWaitFunc(c.cluster.context.Clientset, updatedDeployments, listFunc)
+	failures := updateMultipleDeploymentsAndWaitFunc(c.cluster.clusterInfo.Context, c.cluster.context.Clientset, updatedDeployments, listFunc)
 	for _, f := range failures {
 		errs.addError("%v", errors.Wrapf(f.Error, "failed to update OSD deployment %q", f.ResourceName))
 	}
@@ -194,7 +194,6 @@ func (c *updateConfig) updateExistingOSDs(errs *provisionErrors) {
 // getOSDUpdateInfo returns an update queue of OSDs which need updated and an existence list of OSD
 // Deployments which already exist.
 func (c *Cluster) getOSDUpdateInfo(errs *provisionErrors) (*updateQueue, *existenceList, error) {
-	ctx := context.TODO()
 	namespace := c.clusterInfo.Namespace
 
 	selector := fmt.Sprintf("%s=%s", k8sutil.AppAttr, AppName)
@@ -202,7 +201,7 @@ func (c *Cluster) getOSDUpdateInfo(errs *provisionErrors) (*updateQueue, *existe
 		// list only rook-ceph-osd Deployments
 		LabelSelector: selector,
 	}
-	deps, err := c.context.Clientset.AppsV1().Deployments(namespace).List(ctx, listOpts)
+	deps, err := c.context.Clientset.AppsV1().Deployments(namespace).List(c.clusterInfo.Context, listOpts)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "failed to query existing OSD deployments to see if they need updated")
 	}
@@ -338,12 +337,11 @@ func (e *existenceList) Exists(osdID int) bool {
 
 // return a function that will list only OSD deployments with the IDs given
 func (c *Cluster) getFuncToListDeploymentsWithIDs(osdIDs []string) func() (*appsv1.DeploymentList, error) {
-	ctx := context.TODO()
 	selector := fmt.Sprintf("ceph-osd-id in (%s)", strings.Join(osdIDs, ", "))
 	listOpts := metav1.ListOptions{
 		LabelSelector: selector, // e.g. 'ceph-osd-id in (1, 3, 5, 7, 9)'
 	}
 	return func() (*appsv1.DeploymentList, error) {
-		return c.context.Clientset.AppsV1().Deployments(c.clusterInfo.Namespace).List(ctx, listOpts)
+		return c.context.Clientset.AppsV1().Deployments(c.clusterInfo.Namespace).List(c.clusterInfo.Context, listOpts)
 	}
 }

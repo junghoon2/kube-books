@@ -10,7 +10,7 @@ indent: true
 Each Rook Ceph cluster has some built in metrics collectors/exporters for monitoring with [Prometheus](https://prometheus.io/).
 
 If you do not have Prometheus running, follow the steps below to enable monitoring of Rook. If your cluster already
-contains a Prometheus instance, it will automatically discover Rooks scrape endpoint using the standard
+contains a Prometheus instance, it will automatically discover Rook's scrape endpoint using the standard
 `prometheus.io/scrape` and `prometheus.io/port` annotations.
 
 > **NOTE**: This assumes that the Prometheus instances is searching all your Kubernetes namespaces for Pods with these annotations.
@@ -38,8 +38,8 @@ With the Prometheus operator running, we can create a service monitor that will 
 From the root of your locally cloned Rook repo, go the monitoring directory:
 
 ```console
-$ git clone --single-branch --branch v1.7.5  https://github.com/rook/rook.git
-cd rook/cluster/examples/kubernetes/ceph/monitoring
+$ git clone --single-branch --branch v1.9.2 https://github.com/rook/rook.git
+cd rook/deploy/examples/monitoring
 ```
 
 Create the service monitor as well as the Prometheus server pod and service:
@@ -95,12 +95,20 @@ A guide to how you can write your own Prometheus consoles can be found on the of
 
 ## Prometheus Alerts
 
-To enable the Ceph Prometheus alerts follow these steps:
+To enable the Ceph Prometheus alerts via the helm charts, set the following properties in values.yaml:
+- rook-ceph chart:
+  `monitoring.enabled: true`
+- rook-ceph-cluster chart:
+  `monitoring.enabled: true`
+  `monitoring.createPrometheusRules: true`
 
-1. Create the RBAC rules to enable monitoring.
+Alternatively, to enable the Ceph Prometheus alerts with example manifests follow these steps:
+
+1. Create the RBAC and prometheus rules:
 
 ```console
-kubectl create -f cluster/examples/kubernetes/ceph/monitoring/rbac.yaml
+kubectl create -f deploy/examples/monitoring/rbac.yaml
+kubectl create -f deploy/examples/monitoring/localrules.yaml
 ```
 
 2. Make following changes to your CephCluster object (e.g., `cluster.yaml`).
@@ -116,11 +124,8 @@ spec:
 [...]
   monitoring:
     enabled: true
-    rulesNamespace: "rook-ceph"
 [...]
 ```
-
-(Where `rook-ceph` is the CephCluster name / namespace)
 
 3. Deploy or update the CephCluster object.
 
@@ -129,6 +134,52 @@ kubectl apply -f cluster.yaml
 ```
 
 > **NOTE**: This expects the Prometheus Operator and a Prometheus instance to be pre-installed by the admin.
+
+### Customize Alerts
+
+The Prometheus alerts can be customized with a post-processor using tools such as [Kustomize](https://kustomize.io/).
+For example, first extract the helm chart:
+
+```console
+helm template -f values.yaml rook-release/rook-ceph-cluster > cluster-chart.yaml
+```
+
+Now create the desired customization configuration files. This simple example will show how to
+update the severity of a rule, add a label to a rule, and change the `for` time value.
+
+Create a file named kustomization.yaml:
+
+```yaml
+patches:
+- path: modifications.yaml
+  target:
+    group: monitoring.coreos.com
+    kind: PrometheusRule
+    name: prometheus-ceph-rules
+    version: v1
+resources:
+- cluster-chart.yaml
+```
+
+Create a file named modifications.yaml
+
+```yaml
+- op: add
+  path: /spec/groups/0/rules/0/labels
+  value:
+    my-label: foo
+    severity: none
+- op: add
+  path: /spec/groups/0/rules/0/for
+  value: 15m
+```
+
+Finally, run kustomize to update the desired prometheus rules:
+
+```console
+kustomize build . > updated-chart.yaml
+kubectl create -f updated-chart.yaml
+```
 
 ## Grafana Dashboards
 
@@ -151,7 +202,7 @@ with each update or upgrade. This should be done at the same time you update Roo
 like `common.yaml`.
 
 ```console
-kubectl apply -f cluster/examples/kubernetes/ceph/monitoring/rbac.yaml
+kubectl apply -f deploy/examples/monitoring/rbac.yaml
 ```
 
 > This is updated automatically if you are upgrading via the helm chart
@@ -202,11 +253,38 @@ kind: CephCluster
 metadata:
   name: rook-ceph
   namespace: rook-ceph
-[...]
+  [...]
 spec:
-[...]
-labels:
-  monitoring:
-    prometheus: k8s
-[...]
+  [...]
+  labels:
+    monitoring:
+      prometheus: k8s
+  [...]
+```
+
+### Horizontal Pod Scaling using Kubernetes Event-driven Autoscaling (KEDA)
+
+Using metrics exported from the Prometheus service, the horizontal pod scaling can use the custom metrics other than CPU and memory consumption. It can be done with help of Prometheus Scaler provided by the [KEDA](https://keda.sh/docs/2.5/scalers/prometheus/). See the [KEDA deployment guide](https://keda.sh/docs/2.5/deploy/) for details.
+
+Following is an example to autoscale RGW:
+```YAML
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+ name: rgw-scale
+ namespace: rook-ceph
+spec:
+ scaleTargetRef:
+   kind: Deployment
+   name: rook-ceph-rgw-my-store-a # deployment for the autoscaling
+ minReplicaCount: 1
+ maxReplicaCount: 5
+ triggers:
+ - type: prometheus
+   metadata:
+     serverAddress: http://rook-prometheus.rook-ceph.svc:9090
+     metricName: collecting_ceph_rgw_put
+     query: |
+       sum(rate(ceph_rgw_put[2m])) # promethues query used for autoscaling
+     threshold: "90"
 ```

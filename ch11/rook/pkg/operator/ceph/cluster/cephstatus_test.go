@@ -128,7 +128,7 @@ func TestCephStatus(t *testing.T) {
 }
 
 func TestNewCephStatusChecker(t *testing.T) {
-	clusterInfo := cephclient.AdminClusterInfo("ns")
+	clusterInfo := cephclient.AdminTestClusterInfo("ns")
 	c := &clusterd.Context{}
 	time10s, err := time.ParseDuration("10s")
 	assert.NoError(t, err)
@@ -159,7 +159,7 @@ func TestNewCephStatusChecker(t *testing.T) {
 func TestConfigureHealthSettings(t *testing.T) {
 	c := &cephStatusChecker{
 		context:     &clusterd.Context{},
-		clusterInfo: cephclient.AdminClusterInfo("ns"),
+		clusterInfo: cephclient.AdminTestClusterInfo("ns"),
 	}
 	setGlobalIDReclaim := false
 	c.context.Executor = &exectest.MockExecutor{
@@ -283,7 +283,7 @@ func TestForceDeleteStuckRookPodsOnNotReadyNodes(t *testing.T) {
 	}
 
 	// There should be no error
-	err = c.forceDeleteStuckRookPodsOnNotReadyNodes()
+	err = c.forceDeleteStuckRookPodsOnNotReadyNodes(ctx)
 	assert.NoError(t, err)
 
 	// The pod should still exist since its not deleted.
@@ -297,7 +297,7 @@ func TestForceDeleteStuckRookPodsOnNotReadyNodes(t *testing.T) {
 	assert.NoError(t, err)
 
 	// There should be no error as the pod is deleted
-	err = c.forceDeleteStuckRookPodsOnNotReadyNodes()
+	err = c.forceDeleteStuckRookPodsOnNotReadyNodes(ctx)
 	assert.NoError(t, err)
 
 	// The pod should be deleted since the pod is marked as deleted and the node is in NotReady state

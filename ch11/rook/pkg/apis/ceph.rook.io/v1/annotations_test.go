@@ -20,8 +20,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/ghodss/yaml"
 	"github.com/stretchr/testify/assert"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/yaml"
 )
 
 func TestCephAnnotationsMerge(t *testing.T) {
@@ -80,7 +81,7 @@ mon:
 `)
 
 	// convert the raw spec yaml into JSON
-	rawJSON, err := yaml.YAMLToJSON(specYaml)
+	rawJSON, err := yaml.ToJSON(specYaml)
 	assert.Nil(t, err)
 
 	// unmarshal the JSON into a strongly typed annotations spec object
@@ -97,4 +98,42 @@ mon:
 		"mon": nil,
 	}
 	assert.Equal(t, expected, annotations)
+}
+
+func TestAnnotationsApply(t *testing.T) {
+	objMeta := &metav1.ObjectMeta{}
+	testAnnotations := Annotations{
+		"foo":   "bar",
+		"hello": "world",
+	}
+	testAnnotations.ApplyToObjectMeta(objMeta)
+	assert.Equal(t, testAnnotations, Annotations(objMeta.Annotations))
+
+	testAnnotations["isthisatest"] = "test"
+	testAnnotations.ApplyToObjectMeta(objMeta)
+	assert.Equal(t, testAnnotations, Annotations(objMeta.Annotations))
+}
+
+func TestAnnotationsMerge(t *testing.T) {
+	testAnnotationsPart1 := Annotations{
+		"foo":   "bar",
+		"hello": "world",
+	}
+	testAnnotationsPart2 := Annotations{
+		"bar":   "foo",
+		"hello": "earth",
+	}
+	expected := map[string]string{
+		"foo":   "bar",
+		"bar":   "foo",
+		"hello": "world",
+	}
+	assert.Equal(t, expected, map[string]string(testAnnotationsPart1.Merge(testAnnotationsPart2)))
+
+	// Test that nil annotations can still be appended to
+	testAnnotationsPart3 := Annotations{
+		"hello": "world",
+	}
+	var empty Annotations
+	assert.Equal(t, map[string]string(testAnnotationsPart3), map[string]string(empty.Merge(testAnnotationsPart3)))
 }

@@ -15,17 +15,22 @@
 # see Makefile for the BASEIMAGE definition
 FROM BASEIMAGE
 
-ARG ARCH
-ARG TINI_VERSION
+# env vars for s5cmd
+ARG S5CMD_VERSION
+ARG S5CMD_ARCH
 
-# Run tini as PID 1 and avoid signal handling issues
-RUN curl --fail -sSL -o /tini https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini-${ARCH} && \
-    chmod +x /tini
+# Install the s5cmd package to interact with s3 gateway
+RUN curl --fail -sSL -o /s5cmd.tar.gz https://github.com/peak/s5cmd/releases/download/v${S5CMD_VERSION}/s5cmd_${S5CMD_VERSION}_${S5CMD_ARCH}.tar.gz && \
+    mkdir /s5cmd && \
+    tar xf /s5cmd.tar.gz -C /s5cmd && \
+    install /s5cmd/s5cmd /usr/local/bin/s5cmd && \
+    rm -rf /s5cmd.tar.gz /s5cmd
 
-COPY rook rookflex toolbox.sh set-ceph-debug-level /usr/local/bin/
-COPY ceph-csi /etc/ceph-csi
+COPY rook toolbox.sh set-ceph-debug-level /usr/local/bin/
 COPY ceph-monitoring /etc/ceph-monitoring
 COPY rook-external /etc/rook-external/
 COPY ceph-csv-templates /etc/ceph-csv-templates
-ENTRYPOINT ["/tini", "--", "/usr/local/bin/rook"]
+RUN useradd rook -u 2016 # 2016 is the UID of the rook user and also the year of the first commit in the project
+USER 2016
+ENTRYPOINT ["/usr/local/bin/rook"]
 CMD [""]

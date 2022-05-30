@@ -27,7 +27,7 @@ import (
 const (
 	// snapshotterVersion from which the snapshotcontroller and CRD will be
 	// installed
-	snapshotterVersion = "v4.0.0"
+	snapshotterVersion = "v5.0.1"
 	repoURL            = "https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter"
 	rbacPath           = "deploy/kubernetes/snapshot-controller/rbac-snapshot-controller.yaml"
 	controllerPath     = "deploy/kubernetes/snapshot-controller/setup-snapshot-controller.yaml"
@@ -40,6 +40,8 @@ const (
 // CheckSnapshotISReadyToUse checks snapshot is ready to use
 func (k8sh *K8sHelper) CheckSnapshotISReadyToUse(name, namespace string, retries int) (bool, error) {
 	for i := 0; i < retries; i++ {
+		// sleep first and try to check snapshot is ready to cover the error cases.
+		time.Sleep(time.Duration(i) * time.Second)
 		ready, err := k8sh.executor.ExecuteCommandWithOutput("kubectl", "get", "volumesnapshot", name, "--namespace", namespace, "-o", "jsonpath={.status.readyToUse}")
 		if err != nil {
 			return false, err
@@ -52,7 +54,6 @@ func (k8sh *K8sHelper) CheckSnapshotISReadyToUse(name, namespace string, retries
 		if val {
 			return true, nil
 		}
-		time.Sleep(RetryInterval * time.Second)
 	}
 	return false, fmt.Errorf("giving up waiting for %q snapshot in namespace %q", name, namespace)
 }
@@ -83,21 +84,21 @@ func (k8sh *K8sHelper) snapshotController(action string) error {
 // WaitForSnapshotController check snapshotcontroller is ready within given
 // retries count.
 func (k8sh *K8sHelper) WaitForSnapshotController(retries int) error {
-	namespace := "default"
+	namespace := "kube-system"
 	ctx := context.TODO()
 	snapshotterName := "snapshot-controller"
 	for i := 0; i < retries; i++ {
-		ss, err := k8sh.Clientset.AppsV1().StatefulSets(namespace).Get(ctx, snapshotterName, metav1.GetOptions{})
+		ss, err := k8sh.Clientset.AppsV1().Deployments(namespace).Get(ctx, snapshotterName, metav1.GetOptions{})
 		if err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
 		if ss.Status.ReadyReplicas > 0 && ss.Status.ReadyReplicas == ss.Status.Replicas {
 			return nil
 		}
-		logger.Infof("waiting for %q statufulset in namespace %q (readyreplicas %d < replicas %d)", snapshotterName, namespace, ss.Status.ReadyReplicas, ss.Status.Replicas)
+		logger.Infof("waiting for %q deployment in namespace %q (readyreplicas %d < replicas %d)", snapshotterName, namespace, ss.Status.ReadyReplicas, ss.Status.Replicas)
 		time.Sleep(RetryInterval * time.Second)
 	}
-	return fmt.Errorf("giving up waiting for %q statufulset in namespace %q", snapshotterName, namespace)
+	return fmt.Errorf("giving up waiting for %q deployment in namespace %q", snapshotterName, namespace)
 }
 
 // CreateSnapshotController creates the snapshotcontroller and required RBAC
@@ -112,20 +113,33 @@ func (k8sh *K8sHelper) DeleteSnapshotController() error {
 
 // snapshotCRD can be used for creating or deleting the snapshot CRD's
 func (k8sh *K8sHelper) snapshotCRD(action string) error {
+	// setting validate=false to skip CRD validation during create operation to
+	// support lower Kubernetes versions.
+	args := func(crdpath string) []string {
+		a := []string{
+			action,
+			"-f",
+			crdpath,
+		}
+		if action == "create" {
+			a = append(a, "--validate=false")
+		}
+		return a
+	}
 	snapshotClassCRD := fmt.Sprintf("%s/%s/%s", repoURL, snapshotterVersion, snapshotClassCRDPath)
-	_, err := k8sh.Kubectl(action, "-f", snapshotClassCRD)
+	_, err := k8sh.Kubectl(args(snapshotClassCRD)...)
 	if err != nil {
 		return err
 	}
 
 	snapshotContentsCRD := fmt.Sprintf("%s/%s/%s", repoURL, snapshotterVersion, volumeSnapshotContentsCRDPath)
-	_, err = k8sh.Kubectl(action, "-f", snapshotContentsCRD)
+	_, err = k8sh.Kubectl(args(snapshotContentsCRD)...)
 	if err != nil {
 		return err
 	}
 
 	snapshotCRD := fmt.Sprintf("%s/%s/%s", repoURL, snapshotterVersion, volumeSnapshotCRDPath)
-	_, err = k8sh.Kubectl(action, "-f", snapshotCRD)
+	_, err = k8sh.Kubectl(args(snapshotCRD)...)
 	if err != nil {
 		return err
 	}

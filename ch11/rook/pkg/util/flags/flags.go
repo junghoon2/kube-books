@@ -16,7 +16,6 @@ limitations under the License.
 package flags
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"regexp"
@@ -53,18 +52,6 @@ func createRequiredFlagError(name string, flags []string) error {
 	}
 
 	return fmt.Errorf("%s are required for %s", strings.Join(flags, ","), name)
-}
-
-func SetLoggingFlags(flags *pflag.FlagSet) {
-	//Add commandline flags to the flagset. We will always write to stderr
-	//and not to a file by default
-	flags.AddGoFlagSet(flag.CommandLine)
-	if err := flags.Set("logtostderr", "true"); err != nil {
-		logger.Infof("failed to set flag %q. %v", "logtostderr", err)
-	}
-	if err := flags.Parse(nil); err != nil {
-		panic(err)
-	}
 }
 
 func SetFlagsFromEnv(flags *pflag.FlagSet, prefix string) {

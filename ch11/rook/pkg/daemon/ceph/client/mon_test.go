@@ -30,7 +30,7 @@ import (
 func TestCephArgs(t *testing.T) {
 	// cluster a under /etc
 	args := []string{}
-	clusterInfo := AdminClusterInfo("a")
+	clusterInfo := AdminTestClusterInfo("a")
 	exec.CephCommandsTimeout = 15 * time.Second
 	command, args := FinalizeCephCommandArgs(CephTool, clusterInfo, args, "/etc")
 	assert.Equal(t, CephTool, command)
@@ -79,7 +79,7 @@ func TestStretchElectionStrategy(t *testing.T) {
 		return "", errors.Errorf("unexpected ceph command %q", args)
 	}
 	context := &clusterd.Context{Executor: executor}
-	clusterInfo := AdminClusterInfo("mycluster")
+	clusterInfo := AdminTestClusterInfo("mycluster")
 
 	err := EnableStretchElectionStrategy(context, clusterInfo)
 	assert.NoError(t, err)
@@ -88,23 +88,38 @@ func TestStretchElectionStrategy(t *testing.T) {
 func TestStretchClusterMonTiebreaker(t *testing.T) {
 	monName := "a"
 	failureDomain := "rack"
+	setTiebreaker := false
+	enabledStretch := false
 	executor := &exectest.MockExecutor{}
 	executor.MockExecuteCommandWithOutput = func(command string, args ...string) (string, error) {
 		logger.Infof("Command: %s %v", command, args)
 		switch {
 		case args[0] == "mon" && args[1] == "enable_stretch_mode":
+			enabledStretch = true
 			assert.Equal(t, monName, args[2])
 			assert.Equal(t, defaultStretchCrushRuleName, args[3])
 			assert.Equal(t, failureDomain, args[4])
+			return "", nil
+		case args[0] == "mon" && args[1] == "set_new_tiebreaker":
+			setTiebreaker = true
+			assert.Equal(t, monName, args[2])
 			return "", nil
 		}
 		return "", errors.Errorf("unexpected ceph command %q", args)
 	}
 	context := &clusterd.Context{Executor: executor}
-	clusterInfo := AdminClusterInfo("mycluster")
+	clusterInfo := AdminTestClusterInfo("mycluster")
 
 	err := SetMonStretchTiebreaker(context, clusterInfo, monName, failureDomain)
 	assert.NoError(t, err)
+	assert.True(t, enabledStretch)
+	assert.False(t, setTiebreaker)
+	enabledStretch = false
+
+	err = SetNewTiebreaker(context, clusterInfo, monName)
+	assert.NoError(t, err)
+	assert.True(t, setTiebreaker)
+	assert.False(t, enabledStretch)
 }
 
 func TestMonDump(t *testing.T) {
@@ -124,7 +139,7 @@ func TestMonDump(t *testing.T) {
 		return "", errors.Errorf("unexpected ceph command %q", args)
 	}
 	context := &clusterd.Context{Executor: executor}
-	clusterInfo := AdminClusterInfo("mycluster")
+	clusterInfo := AdminTestClusterInfo("mycluster")
 
 	dump, err := GetMonDump(context, clusterInfo)
 	assert.NoError(t, err)

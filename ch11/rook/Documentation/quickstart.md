@@ -14,11 +14,11 @@ If you have any questions along the way, please don't hesitate to ask us in our 
 This guide will walk you through the basic setup of a Ceph cluster and enable you to consume block, object, and file storage
 from other pods running in your cluster.
 
+**Always use a virtual machine when testing Rook. Never use your host system where local devices may mistakenly be consumed.**
+
 ## Minimum Version
 
-Kubernetes **v1.11** or higher is supported by Rook.
-
-**Important** If you are using K8s 1.15 or older, you will need to create a different version of the Rook CRDs. Create the `crds.yaml` found in the [pre-k8s-1.16](https://github.com/rook/rook/blob/{{ branchName }}/cluster/examples/kubernetes/ceph/pre-k8s-1.16) subfolder of the example manifests.
+Kubernetes **v1.17** or higher is supported by Rook.
 
 ## Prerequisites
 
@@ -33,11 +33,11 @@ In order to configure the Ceph storage cluster, at least one of these local stor
 
 ## TL;DR
 
-A simple Rook cluster can be created with the following kubectl commands and [example manifests](https://github.com/rook/rook/blob/{{ branchName }}/cluster/examples/kubernetes/ceph).
+A simple Rook cluster can be created with the following kubectl commands and [example manifests](https://github.com/rook/rook/blob/{{ branchName }}/deploy/examples).
 
 ```console
-$ git clone --single-branch --branch {{ branchName }} https://github.com/rook/rook.git
-cd rook/cluster/examples/kubernetes/ceph
+$ git clone --single-branch --branch v1.9.2 https://github.com/rook/rook.git
+cd rook/deploy/examples
 kubectl create -f crds.yaml -f common.yaml -f operator.yaml
 kubectl create -f cluster.yaml
 ```
@@ -46,10 +46,10 @@ After the cluster is running, you can create [block, object, or file](#storage) 
 
 ## Deploy the Rook Operator
 
-The first step is to deploy the Rook operator. Check that you are using the [example yaml files](https://github.com/rook/rook/blob/{{ branchName }}/cluster/examples/kubernetes/ceph) that correspond to your release of Rook. For more options, see the [examples documentation](ceph-examples.md).
+The first step is to deploy the Rook operator. Check that you are using the [example yaml files](https://github.com/rook/rook/blob/{{ branchName }}/deploy/examples) that correspond to your release of Rook. For more options, see the [examples documentation](ceph-examples.md).
 
 ```console
-cd cluster/examples/kubernetes/ceph
+cd deploy/examples
 kubectl create -f crds.yaml -f common.yaml -f operator.yaml
 
 # verify the rook-ceph-operator is in the `Running` state before proceeding
@@ -59,12 +59,9 @@ kubectl -n rook-ceph get pod
 You can also deploy the operator with the [Rook Helm Chart](helm-operator.md).
 
 Before you start the operator in production, there are some settings that you may want to consider:
-1. If you are using kubernetes v1.15 or older you need to create CRDs found here `/cluster/examples/kubernetes/ceph/pre-k8s-1.16/crd.yaml`.
-   The apiextension v1beta1 version of CustomResourceDefinition was deprecated in Kubernetes v1.16.
-2. Consider if you want to enable certain Rook features that are disabled by default. See the [operator.yaml](https://github.com/rook/rook/blob/{{ branchName }}/cluster/examples/kubernetes/ceph/operator.yaml) for these and other advanced settings.
+1. Consider if you want to enable certain Rook features that are disabled by default. See the [operator.yaml](https://github.com/rook/rook/blob/{{ branchName }}/deploy/examples/operator.yaml) for these and other advanced settings.
    1. Device discovery: Rook will watch for new devices to configure if the `ROOK_ENABLE_DISCOVERY_DAEMON` setting is enabled, commonly used in bare metal clusters.
-   2. Flex driver: The flex driver is deprecated in favor of the CSI driver, but can still be enabled with the `ROOK_ENABLE_FLEX_DRIVER` setting.
-   3. Node affinity and tolerations: The CSI driver by default will run on any node in the cluster. To configure the CSI driver affinity, several settings are available.
+   2. Node affinity and tolerations: The CSI driver by default will run on any node in the cluster. To configure the CSI driver affinity, several settings are available.
 
 If you wish to deploy into a namespace other than the default `rook-ceph`, see the
 [Ceph advanced configuration section](ceph-advanced-configuration.md#using-alternate-namespaces) on the topic.
@@ -73,9 +70,10 @@ If you wish to deploy into a namespace other than the default `rook-ceph`, see t
 
 The Rook documentation is focused around starting Rook in a production environment. Examples are also
 provided to relax some settings for test environments. When creating the cluster later in this guide, consider these example cluster manifests:
-- [cluster.yaml](https://github.com/rook/rook/blob/{{ branchName }}/cluster/examples/kubernetes/ceph/cluster.yaml): Cluster settings for a production cluster running on bare metal. Requires at least three worker nodes.
-- [cluster-on-pvc.yaml](https://github.com/rook/rook/blob/{{ branchName }}/cluster/examples/kubernetes/ceph/cluster-on-pvc.yaml): Cluster settings for a production cluster running in a dynamic cloud environment.
-- [cluster-test.yaml](https://github.com/rook/rook/blob/{{ branchName }}/cluster/examples/kubernetes/ceph/cluster-test.yaml): Cluster settings for a test environment such as minikube.
+
+- [cluster.yaml](https://github.com/rook/rook/blob/{{ branchName }}/deploy/examples/cluster.yaml): Cluster settings for a production cluster running on bare metal. Requires at least three worker nodes.
+- [cluster-on-pvc.yaml](https://github.com/rook/rook/blob/{{ branchName }}/deploy/examples/cluster-on-pvc.yaml): Cluster settings for a production cluster running in a dynamic cloud environment.
+- [cluster-test.yaml](https://github.com/rook/rook/blob/{{ branchName }}/deploy/examples/cluster-test.yaml): Cluster settings for a test environment such as minikube.
 
 See the [Ceph examples](ceph-examples.md) for more details.
 

@@ -23,7 +23,6 @@ import (
 
 	"github.com/pkg/errors"
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
-	"github.com/rook/rook/pkg/apis/rook.io"
 	"github.com/rook/rook/pkg/daemon/ceph/client"
 	"github.com/rook/rook/pkg/operator/ceph/cluster/mon"
 	"github.com/rook/rook/pkg/operator/ceph/config"
@@ -52,7 +51,7 @@ func (c *Cluster) makeDeployment(mgrConfig *mgrConfig) (*apps.Deployment, error)
 	podSpec := v1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   mgrConfig.ResourceName,
-			Labels: c.getPodLabels(mgrConfig.DaemonID, true),
+			Labels: c.getPodLabels(mgrConfig, true),
 		},
 		Spec: v1.PodSpec{
 			InitContainers: []v1.Container{
@@ -112,11 +111,11 @@ func (c *Cluster) makeDeployment(mgrConfig *mgrConfig) (*apps.Deployment, error)
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      mgrConfig.ResourceName,
 			Namespace: c.clusterInfo.Namespace,
-			Labels:    c.getPodLabels(mgrConfig.DaemonID, true),
+			Labels:    c.getPodLabels(mgrConfig, true),
 		},
 		Spec: apps.DeploymentSpec{
 			Selector: &metav1.LabelSelector{
-				MatchLabels: c.getPodLabels(mgrConfig.DaemonID, false),
+				MatchLabels: c.getPodLabels(mgrConfig, false),
 			},
 			Template: podSpec,
 			Replicas: &replicas,
@@ -185,12 +184,13 @@ func (c *Cluster) makeMgrDaemonContainer(mgrConfig *mgrConfig) v1.Container {
 		),
 		Resources:       cephv1.GetMgrResources(c.spec.Resources),
 		SecurityContext: controller.PodSecurityContext(),
+		StartupProbe:    controller.GenerateStartupProbeExecDaemon(config.MgrType, mgrConfig.DaemonID),
 		LivenessProbe:   controller.GenerateLivenessProbeExecDaemon(config.MgrType, mgrConfig.DaemonID),
 		WorkingDir:      config.VarLogCephDir,
 	}
 
-	// If the liveness probe is enabled
-	container = config.ConfigureLivenessProbe(cephv1.KeyMgr, container, c.spec.HealthCheck)
+	container = config.ConfigureStartupProbe(container, c.spec.HealthCheck.StartupProbe[cephv1.KeyMgr])
+	container = config.ConfigureLivenessProbe(container, c.spec.HealthCheck.LivenessProbe[cephv1.KeyMgr])
 
 	// If host networking is enabled, we don't need a bind addr that is different from the public addr
 	if !c.spec.Network.IsHost() {
@@ -229,11 +229,12 @@ func (c *Cluster) makeMgrSidecarContainer(mgrConfig *mgrConfig) v1.Container {
 	}
 
 	return v1.Container{
-		Args:      []string{"ceph", "mgr", "watch-active"},
-		Name:      "watch-active",
-		Image:     c.rookVersion,
-		Env:       envVars,
-		Resources: cephv1.GetMgrSidecarResources(c.spec.Resources),
+		Args:            []string{"ceph", "mgr", "watch-active"},
+		Name:            "watch-active",
+		Image:           c.rookVersion,
+		Env:             envVars,
+		Resources:       cephv1.GetMgrSidecarResources(c.spec.Resources),
+		SecurityContext: controller.PrivilegedContext(true),
 	}
 }
 
@@ -319,16 +320,16 @@ func (c *Cluster) makeDashboardService(name, activeDaemon string) (*v1.Service, 
 	return svc, nil
 }
 
-func (c *Cluster) getPodLabels(daemonName string, includeNewLabels bool) map[string]string {
-	labels := controller.CephDaemonAppLabels(AppName, c.clusterInfo.Namespace, "mgr", daemonName, includeNewLabels)
+func (c *Cluster) getPodLabels(mgrConfig *mgrConfig, includeNewLabels bool) map[string]string {
+	labels := controller.CephDaemonAppLabels(AppName, c.clusterInfo.Namespace, config.MgrType, mgrConfig.DaemonID, c.clusterInfo.NamespacedName().Name, "cephclusters.ceph.rook.io", includeNewLabels)
 	// leave "instance" key for legacy usage
-	labels["instance"] = daemonName
+	labels["instance"] = mgrConfig.DaemonID
 	return labels
 }
 
 func (c *Cluster) applyPrometheusAnnotations(objectMeta *metav1.ObjectMeta) {
 	if len(cephv1.GetMgrAnnotations(c.spec.Annotations)) == 0 {
-		t := rook.Annotations{
+		t := cephv1.Annotations{
 			"prometheus.io/scrape": "true",
 			"prometheus.io/port":   strconv.Itoa(int(DefaultMetricsPort)),
 		}

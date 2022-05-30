@@ -20,7 +20,9 @@ import (
 	b64 "encoding/base64"
 	"fmt"
 
+	"github.com/aws/aws-sdk-go/service/s3"
 	bktv1alpha1 "github.com/kube-object-storage/lib-bucket-provisioner/pkg/apis/objectbucket.io/v1alpha1"
+	rgw "github.com/rook/rook/pkg/operator/ceph/object"
 	"github.com/rook/rook/tests/framework/installer"
 	"github.com/rook/rook/tests/framework/utils"
 )
@@ -36,12 +38,12 @@ func CreateBucketOperation(k8sh *utils.K8sHelper, manifests installer.CephManife
 	return &BucketOperation{k8sh, manifests}
 }
 
-func (b *BucketOperation) CreateBucketStorageClass(namespace string, storeName string, storageClassName string, reclaimPolicy string, region string) error {
-	return b.k8sh.ResourceOperation("create", b.manifests.GetBucketStorageClass(storeName, storageClassName, reclaimPolicy, region))
+func (b *BucketOperation) CreateBucketStorageClass(namespace string, storeName string, storageClassName string, reclaimPolicy string) error {
+	return b.k8sh.ResourceOperation("create", b.manifests.GetBucketStorageClass(storeName, storageClassName, reclaimPolicy))
 }
 
-func (b *BucketOperation) DeleteBucketStorageClass(namespace string, storeName string, storageClassName string, reclaimPolicy string, region string) error {
-	err := b.k8sh.ResourceOperation("delete", b.manifests.GetBucketStorageClass(storeName, storageClassName, reclaimPolicy, region))
+func (b *BucketOperation) DeleteBucketStorageClass(namespace string, storeName string, storageClassName string, reclaimPolicy string) error {
+	err := b.k8sh.ResourceOperation("delete", b.manifests.GetBucketStorageClass(storeName, storageClassName, reclaimPolicy))
 	return err
 }
 
@@ -49,11 +51,23 @@ func (b *BucketOperation) CreateObc(obcName string, storageClassName string, buc
 	return b.k8sh.ResourceOperation("create", b.manifests.GetOBC(obcName, storageClassName, bucketName, maxObject, createBucket))
 }
 
+func (b *BucketOperation) CreateObcNotification(obcName string, storageClassName string, bucketName string, notification string, createBucket bool) error {
+	return b.k8sh.ResourceOperation("create", b.manifests.GetOBCNotification(obcName, storageClassName, bucketName, notification, createBucket))
+}
+
 func (b *BucketOperation) DeleteObc(obcName string, storageClassName string, bucketName string, maxObject string, createBucket bool) error {
 	return b.k8sh.ResourceOperation("delete", b.manifests.GetOBC(obcName, storageClassName, bucketName, maxObject, createBucket))
 }
 
 func (b *BucketOperation) UpdateObc(obcName string, storageClassName string, bucketName string, maxObject string, createBucket bool) error {
+	return b.k8sh.ResourceOperation("apply", b.manifests.GetOBC(obcName, storageClassName, bucketName, maxObject, createBucket))
+}
+
+func (b *BucketOperation) UpdateObcNotificationAdd(obcName string, storageClassName string, bucketName string, notification string, createBucket bool) error {
+	return b.k8sh.ResourceOperation("apply", b.manifests.GetOBCNotification(obcName, storageClassName, bucketName, notification, createBucket))
+}
+
+func (b *BucketOperation) UpdateObcNotificationRemove(obcName string, storageClassName string, bucketName string, maxObject string, createBucket bool) error {
 	return b.k8sh.ResourceOperation("apply", b.manifests.GetOBC(obcName, storageClassName, bucketName, maxObject, createBucket))
 }
 
@@ -133,4 +147,38 @@ func (b *BucketOperation) CheckOBMaxObject(obcName, maxobject string) bool {
 	obName, _ := b.k8sh.GetResource("obc", obcName, "--output", "jsonpath={.spec.objectBucketName}")
 	fetchMaxObject, _ := b.k8sh.GetResource("ob", obName, "--output", "jsonpath={.spec.endpoint.additionalConfig.maxObjects}")
 	return maxobject == fetchMaxObject
+}
+
+// Checks the bucket notifications set on RGW backend bucket
+func (b *BucketOperation) CheckBucketNotificationSetonRGW(namespace, storeName, obcName, bucketname, notificationName string, helper *TestClient, tlsEnabled bool) bool {
+	var s3client *rgw.S3Agent
+	var err error
+	s3endpoint, _ := helper.ObjectClient.GetEndPointUrl(namespace, storeName)
+	s3AccessKey, _ := helper.BucketClient.GetAccessKey(obcName)
+	s3SecretKey, _ := helper.BucketClient.GetSecretKey(obcName)
+	if tlsEnabled {
+		s3client, err = rgw.NewInsecureS3Agent(s3AccessKey, s3SecretKey, s3endpoint, true)
+	} else {
+		s3client, err = rgw.NewS3Agent(s3AccessKey, s3SecretKey, s3endpoint, true, nil)
+	}
+	if err != nil {
+		logger.Infof("failed to s3client due to %v", err)
+		return false
+	}
+	logger.Infof("endpoint (%s) Accesskey (%s) secret (%s)", s3endpoint, s3AccessKey, s3SecretKey)
+	notifications, err := s3client.Client.GetBucketNotificationConfiguration(&s3.GetBucketNotificationConfigurationRequest{
+		Bucket: &bucketname,
+	})
+	if err != nil {
+		logger.Infof("failed to fetch bucket notifications configuration due to %v", err)
+		return false
+	}
+	logger.Infof("%d bucket notifications found in: %+v", len(notifications.TopicConfigurations), notifications)
+	for _, notification := range notifications.TopicConfigurations {
+		if *notification.Id == notificationName {
+			return true
+		}
+		logger.Infof("bucket notifications name mismatch %q != %q", *notification.Id, notificationName)
+	}
+	return false
 }

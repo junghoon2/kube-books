@@ -17,7 +17,6 @@ limitations under the License.
 package object
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -96,7 +95,7 @@ func (c *debugHTTPClient) Do(req *http.Request) (*http.Response, error) {
 
 const (
 	// RGWAdminOpsUserSecretName is the secret name of the admin ops user
-	// #nosec G101 since this is not leaking any hardcoded credentials, it's just the secret name
+	//nolint:gosec // since this is not leaking any hardcoded credentials, it's just the secret name
 	RGWAdminOpsUserSecretName = "rgw-admin-ops-user"
 	rgwAdminOpsUserAccessKey  = "accessKey"
 	rgwAdminOpsUserSecretKey  = "secretKey"
@@ -122,7 +121,7 @@ func NewMultisiteContext(context *clusterd.Context, clusterInfo *cephclient.Clus
 		return nil, err
 	}
 
-	realmName, zoneGroupName, zoneName, err := getMultisiteForObjectStore(context, &store.Spec, store.Namespace, store.Name)
+	realmName, zoneGroupName, zoneName, err := getMultisiteForObjectStore(clusterInfo.Context, context, &store.Spec, store.Namespace, store.Name)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get realm/zone group/zone for object store %q", nsName)
 	}
@@ -216,7 +215,7 @@ func RunAdminCommandNoMultisite(c *Context, expectJSON bool, args ...string) (st
 
 	// If Multus is enabled we proxy all the command to the mgr sidecar
 	if c.CephClusterSpec.Network.IsMultus() {
-		output, stderr, err = c.Context.RemoteExecutor.ExecCommandInContainerWithFullOutputWithTimeout(cephclient.ProxyAppLabel, cephclient.CommandProxyInitContainerName, c.clusterInfo.Namespace, append([]string{"radosgw-admin"}, args...)...)
+		output, stderr, err = c.Context.RemoteExecutor.ExecCommandInContainerWithFullOutputWithTimeout(c.clusterInfo.Context, cephclient.ProxyAppLabel, cephclient.CommandProxyInitContainerName, c.clusterInfo.Namespace, append([]string{"radosgw-admin"}, args...)...)
 	} else {
 		command, args := cephclient.FinalizeCephCommandArgs("radosgw-admin", c.clusterInfo, args, c.Context.ConfigDir)
 		output, err = c.Context.Executor.ExecuteCommandWithTimeout(exec.CephCommandsTimeout, command, args...)
@@ -418,7 +417,7 @@ func GetAdminOPSUserCredentials(objContext *Context, spec *cephv1.ObjectStoreSpe
 	if spec.IsExternal() {
 		// Fetch the secret for admin ops user
 		s := &v1.Secret{}
-		err := objContext.Context.Client.Get(context.TODO(), types.NamespacedName{Name: RGWAdminOpsUserSecretName, Namespace: ns}, s)
+		err := objContext.Context.Client.Get(objContext.clusterInfo.Context, types.NamespacedName{Name: RGWAdminOpsUserSecretName, Namespace: ns}, s)
 		if err != nil {
 			return "", "", err
 		}
@@ -442,8 +441,20 @@ func GetAdminOPSUserCredentials(objContext *Context, spec *cephv1.ObjectStoreSpe
 		DisplayName:  &rgwAdminOpsUserDisplayName,
 		AdminOpsUser: true,
 	}
-	logger.Debugf("creating s3 user object %q for object store %q", userConfig.UserID, ns)
-	user, rgwerr, err := CreateUser(objContext, userConfig)
+	logger.Debugf("creating s3 user object %q for object store %q", userConfig.UserID, objContext.Name)
+
+	forceUserCreation := false
+	// If the cluster where we are running the rgw user create for the admin ops user is configured
+	// as a secondary cluster the gateway will error out with:
+	// 		Please run the command on master zone. Performing this operation on non-master zone leads to
+	// 		inconsistent metadata between zones
+	// It is safe to force it since the creation will return that the user already exists since it
+	// has been created by the primary cluster. In this case, we simply read the user details.
+	if spec.IsMultisite() {
+		forceUserCreation = true
+	}
+
+	user, rgwerr, err := CreateUser(objContext, userConfig, forceUserCreation)
 	if err != nil {
 		if rgwerr == ErrorCodeFileExists {
 			user, _, err = GetUser(objContext, userConfig.UserID)

@@ -17,6 +17,7 @@ limitations under the License.
 package client
 
 import (
+	"context"
 	"strconv"
 	"testing"
 	"time"
@@ -43,7 +44,7 @@ func TestFinalizeCephCommandArgs(t *testing.T) {
 		"--keyring=/var/lib/rook/rook-ceph/rook/client.admin.keyring",
 	}
 
-	clusterInfo := AdminClusterInfo("rook")
+	clusterInfo := AdminTestClusterInfo("rook")
 	cmd, args := FinalizeCephCommandArgs(expectedCommand, clusterInfo, args, configDir)
 	assert.Exactly(t, expectedCommand, cmd)
 	assert.Exactly(t, expectedArgs, args)
@@ -73,7 +74,7 @@ func TestFinalizeRadosGWAdminCommandArgs(t *testing.T) {
 		"--keyring=/var/lib/rook/rook-ceph/rook/client.admin.keyring",
 	}
 
-	clusterInfo := AdminClusterInfo("rook")
+	clusterInfo := AdminTestClusterInfo("rook")
 	cmd, args := FinalizeCephCommandArgs(expectedCommand, clusterInfo, args, configDir)
 	assert.Exactly(t, expectedCommand, cmd)
 	assert.Exactly(t, expectedArgs, args)
@@ -98,7 +99,7 @@ func TestFinalizeCephCommandArgsToolBox(t *testing.T) {
 		"--connect-timeout=15",
 	}
 
-	clusterInfo := AdminClusterInfo("rook")
+	clusterInfo := AdminTestClusterInfo("rook")
 	exec.CephCommandsTimeout = 15 * time.Second
 	cmd, args := FinalizeCephCommandArgs(expectedCommand, clusterInfo, args, configDir)
 	assert.Exactly(t, "kubectl", cmd)
@@ -110,7 +111,7 @@ func TestNewRBDCommand(t *testing.T) {
 	args := []string{"create", "--size", "1G", "myvol"}
 
 	t.Run("rbd command with no multus", func(t *testing.T) {
-		clusterInfo := AdminClusterInfo("rook")
+		clusterInfo := AdminTestClusterInfo("rook")
 		executor := &exectest.MockExecutor{}
 		executor.MockExecuteCommandWithOutput = func(command string, args ...string) (string, error) {
 			switch {
@@ -129,7 +130,7 @@ func TestNewRBDCommand(t *testing.T) {
 
 	})
 	t.Run("rbd command with multus", func(t *testing.T) {
-		clusterInfo := AdminClusterInfo("rook")
+		clusterInfo := AdminTestClusterInfo("rook")
 		clusterInfo.NetworkSpec.Provider = "multus"
 		executor := &exectest.MockExecutor{}
 		context := &clusterd.Context{Executor: executor, RemoteExecutor: exec.RemotePodCommandExecutor{ClientSet: test.New(t, 3)}}
@@ -139,7 +140,21 @@ func TestNewRBDCommand(t *testing.T) {
 		assert.Error(t, err)
 		assert.Len(t, cmd.args, 4)
 		// This is not the best but it shows we go through the right codepath
-		assert.EqualError(t, err, "no pods found with selector \"rook-ceph-mgr\"")
+		assert.Contains(t, err.Error(), "no pods found with selector \"rook-ceph-mgr\"")
+	})
+
+	t.Run("context canceled nothing to run", func(t *testing.T) {
+		clusterInfo := AdminTestClusterInfo("rook")
+		ctx, cancel := context.WithCancel(context.TODO())
+		clusterInfo.Context = ctx
+		cancel()
+		executor := &exectest.MockExecutor{}
+		context := &clusterd.Context{Executor: executor, RemoteExecutor: exec.RemotePodCommandExecutor{ClientSet: test.New(t, 3)}}
+		cmd := NewRBDCommand(context, clusterInfo, args)
+		_, err := cmd.Run()
+		assert.Error(t, err)
+		// This is not the best but it shows we go through the right codepath
+		assert.EqualError(t, err, "context canceled")
 	})
 
 }

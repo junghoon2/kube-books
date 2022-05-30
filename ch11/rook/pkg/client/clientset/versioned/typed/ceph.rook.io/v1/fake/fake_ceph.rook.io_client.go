@@ -32,6 +32,18 @@ func (c *FakeCephV1) CephBlockPools(namespace string) v1.CephBlockPoolInterface 
 	return &FakeCephBlockPools{c, namespace}
 }
 
+func (c *FakeCephV1) CephBlockPoolRadosNamespaces(namespace string) v1.CephBlockPoolRadosNamespaceInterface {
+	return &FakeCephBlockPoolRadosNamespaces{c, namespace}
+}
+
+func (c *FakeCephV1) CephBucketNotifications(namespace string) v1.CephBucketNotificationInterface {
+	return &FakeCephBucketNotifications{c, namespace}
+}
+
+func (c *FakeCephV1) CephBucketTopics(namespace string) v1.CephBucketTopicInterface {
+	return &FakeCephBucketTopics{c, namespace}
+}
+
 func (c *FakeCephV1) CephClients(namespace string) v1.CephClientInterface {
 	return &FakeCephClients{c, namespace}
 }
@@ -46,6 +58,10 @@ func (c *FakeCephV1) CephFilesystems(namespace string) v1.CephFilesystemInterfac
 
 func (c *FakeCephV1) CephFilesystemMirrors(namespace string) v1.CephFilesystemMirrorInterface {
 	return &FakeCephFilesystemMirrors{c, namespace}
+}
+
+func (c *FakeCephV1) CephFilesystemSubVolumeGroups(namespace string) v1.CephFilesystemSubVolumeGroupInterface {
+	return &FakeCephFilesystemSubVolumeGroups{c, namespace}
 }
 
 func (c *FakeCephV1) CephNFSes(namespace string) v1.CephNFSInterface {

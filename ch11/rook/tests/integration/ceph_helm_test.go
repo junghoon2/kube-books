@@ -41,10 +41,6 @@ import (
 // - Create the object store via the CRD
 // ***************************************************
 func TestCephHelmSuite(t *testing.T) {
-	if installer.SkipTestSuite(installer.CephTestSuite) {
-		t.Skip()
-	}
-
 	s := new(HelmSuite)
 	defer func(s *HelmSuite) {
 		HandlePanics(recover(), s.TearDownSuite, s.T)
@@ -69,15 +65,16 @@ func (h *HelmSuite) SetupSuite() {
 		UseHelm:                   true,
 		UsePVC:                    false,
 		Mons:                      1,
-		UseCSI:                    true,
 		SkipOSDCreation:           false,
-		EnableAdmissionController: false,
+		EnableAdmissionController: true,
 		EnableDiscovery:           true,
+		ChangeHostName:            true,
+		ConnectionsEncrypted:      true,
 		RookVersion:               installer.LocalBuildTag,
-		CephVersion:               installer.OctopusVersion,
+		CephVersion:               installer.PacificVersion,
 	}
 	h.settings.ApplyEnvVars()
-	h.installer, h.k8shelper = StartTestCluster(h.T, h.settings, helmMinimalTestVersion)
+	h.installer, h.k8shelper = StartTestCluster(h.T, h.settings)
 	h.helper = clients.CreateTestClient(h.k8shelper, h.installer.Manifests)
 }
 
@@ -92,6 +89,7 @@ func (h *HelmSuite) AfterTest(suiteName, testName string) {
 // Test to make sure all rook components are installed and Running
 func (h *HelmSuite) TestARookInstallViaHelm() {
 	checkIfRookClusterIsInstalled(h.Suite, h.k8shelper, h.settings.Namespace, h.settings.Namespace, 1)
+	checkIfRookClusterHasHealthyIngress(h.Suite, h.k8shelper, h.settings.Namespace)
 }
 
 // Test BlockCreation on Rook that was installed via Helm
@@ -106,5 +104,7 @@ func (h *HelmSuite) TestFileStoreOnRookInstalledViaHelm() {
 
 // Test Object StoreCreation on Rook that was installed via helm
 func (h *HelmSuite) TestObjectStoreOnRookInstalledViaHelm() {
-	runObjectE2ETestLite(h.helper, h.k8shelper, h.Suite, h.settings, "default", 3, true)
+	deleteStore := true
+	tls := false
+	runObjectE2ETestLite(h.T(), h.helper, h.k8shelper, h.installer, h.settings.Namespace, "default", 3, deleteStore, tls)
 }

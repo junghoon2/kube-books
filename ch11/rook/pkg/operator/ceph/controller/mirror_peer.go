@@ -35,15 +35,15 @@ import (
 )
 
 const (
-	// #nosec G101 since this is not leaking any hardcoded credentials, it's just the prefix of the secret name
+	//nolint:gosec // since this is not leaking any hardcoded credentials, it's just the prefix of the secret name
 	poolMirrorBoostrapPeerSecretName = "pool-peer-token"
-	// #nosec G101 since this is not leaking any hardcoded credentials, it's just the prefix of the secret name
+	//nolint:gosec // since this is not leaking any hardcoded credentials, it's just the prefix of the secret name
 	fsMirrorBoostrapPeerSecretName = "fs-peer-token"
-	// #nosec G101 since this is not leaking any hardcoded credentials, it's just the prefix of the secret name
+	//nolint:gosec // // since this is not leaking any hardcoded credentials, it's just the prefix of the secret name
 	clusterMirrorBoostrapPeerSecretName = "cluster-peer-token"
-	// RBDMirrorBootstrapPeerSecretName #nosec G101 since this is not leaking any hardcoded credentials, it's just the prefix of the secret name
+	//nolint:gosec // since this is not leaking any hardcoded credentials, it's just the prefix of the secret name
 	RBDMirrorBootstrapPeerSecretName = "rbdMirrorBootstrapPeerSecretName"
-	// FSMirrorBootstrapPeerSecretName #nosec G101 since this is not leaking any hardcoded credentials, it's just the prefix of the secret name
+	//nolint:gosec // since this is not leaking any hardcoded credentials, it's just the prefix of the secret name
 	FSMirrorBootstrapPeerSecretName = "fsMirrorBootstrapPeerSecretName"
 )
 
@@ -107,7 +107,7 @@ func CreateBootstrapPeerSecret(ctx *clusterd.Context, clusterInfo *cephclient.Cl
 
 	// Create Secret
 	logger.Debugf("store %s-mirror bootstrap token in a Kubernetes Secret %q in namespace %q", daemonType, s.Name, ns)
-	_, err = k8sutil.CreateOrUpdateSecret(ctx.Clientset, s)
+	_, err = k8sutil.CreateOrUpdateSecret(clusterInfo.Context, ctx.Clientset, s)
 	if err != nil && !kerrors.IsAlreadyExists(err) {
 		return ImmediateRetryResult, errors.Wrapf(err, "failed to create %s-mirror bootstrap peer %q secret", daemonType, s.Name)
 	}

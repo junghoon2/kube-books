@@ -24,7 +24,6 @@ import (
 
 	netapi "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
-	"github.com/rook/rook/pkg/apis/rook.io"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -81,13 +80,22 @@ func ApplyMultus(net cephv1.NetworkSpec, objectMeta *metav1.ObjectMeta) error {
 			shortSyntax = true
 		}
 
-		var isExcluded bool
-		for _, clusterNetworkApps := range getClusterNetworkApps() {
-			isExcluded = strings.Contains(objectMeta.Labels["app"], clusterNetworkApps)
+		app, ok := objectMeta.Labels["app"]
+		if !ok {
+			app = "" // unknown app
 		}
-		if isExcluded {
+		isClusterNetApp := false
+		for _, clusterNetworkApp := range getClusterNetworkApps() {
+			if app == clusterNetworkApp {
+				isClusterNetApp = true
+				break
+			}
+		}
+		if isClusterNetApp {
+			// append all networks to apps that are cluster network apps
 			v = append(v, string(ns))
 		} else {
+			// only append public networks to apps that are not cluster network apps
 			if k == publicNetworkSelectorKeyName {
 				v = append(v, string(ns))
 			}
@@ -106,7 +114,7 @@ func ApplyMultus(net cephv1.NetworkSpec, objectMeta *metav1.ObjectMeta) error {
 		networks = "[" + networks + "]"
 	}
 
-	t := rook.Annotations{
+	t := cephv1.Annotations{
 		"k8s.v1.cni.cncf.io/networks": networks,
 	}
 	t.ApplyToObjectMeta(objectMeta)
@@ -116,7 +124,7 @@ func ApplyMultus(net cephv1.NetworkSpec, objectMeta *metav1.ObjectMeta) error {
 
 // getClusterNetworkApps returns the list of ceph apps that utilize cluster network
 func getClusterNetworkApps() []string {
-	return []string{"osd"}
+	return []string{"rook-ceph-osd"}
 }
 
 // GetNetworkAttachmentConfig returns the NetworkAttachmentDefinitions configuration

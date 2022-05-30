@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
-	"github.com/rook/rook/pkg/apis/rook.io"
 	"github.com/rook/rook/pkg/clusterd"
 	cephclient "github.com/rook/rook/pkg/daemon/ceph/client"
 	"github.com/rook/rook/pkg/operator/ceph/cluster/osd/config"
@@ -39,7 +38,7 @@ import (
 )
 
 func TestPodContainer(t *testing.T) {
-	cluster := &Cluster{rookVersion: "23", clusterInfo: cephclient.AdminClusterInfo("myosd")}
+	cluster := &Cluster{rookVersion: "23", clusterInfo: cephclient.AdminTestClusterInfo("myosd")}
 	cluster.clusterInfo.OwnerInfo = cephclient.NewMinimumOwnerInfo(t)
 	osdProps := osdProperties{
 		crushHostname: "node",
@@ -61,12 +60,10 @@ func TestPodContainer(t *testing.T) {
 	logger.Infof("container: %+v", container)
 	assert.Equal(t, "copy-binaries", container.Args[0])
 	container = c.Spec.Containers[0]
-	assert.Equal(t, "/rook/tini", container.Command[0])
-	assert.Equal(t, "--", container.Args[0])
-	assert.Equal(t, "/rook/rook", container.Args[1])
-	assert.Equal(t, "ceph", container.Args[2])
-	assert.Equal(t, "osd", container.Args[3])
-	assert.Equal(t, "provision", container.Args[4])
+	assert.Equal(t, "/rook/rook", container.Command[0])
+	assert.Equal(t, "ceph", container.Args[0])
+	assert.Equal(t, "osd", container.Args[1])
+	assert.Equal(t, "provision", container.Args[2])
 
 	for _, c := range c.Spec.Containers {
 		vars := operatortest.FindDuplicateEnvVars(c)
@@ -89,7 +86,7 @@ func testPodDevices(t *testing.T, dataDir, deviceName string, allDevices bool) {
 	clientset := fake.NewSimpleClientset()
 	clusterInfo := &cephclient.ClusterInfo{
 		Namespace:   "ns",
-		CephVersion: cephver.Nautilus,
+		CephVersion: cephver.Octopus,
 	}
 	clusterInfo.SetName("test")
 	clusterInfo.OwnerInfo = cephclient.NewMinimumOwnerInfo(t)
@@ -100,7 +97,7 @@ func testPodDevices(t *testing.T, dataDir, deviceName string, allDevices bool) {
 			Selection: cephv1.Selection{UseAllDevices: &allDevices, DeviceFilter: deviceName},
 			Nodes:     []cephv1.Node{{Name: "node1"}},
 		},
-		PriorityClassNames: map[rook.KeyType]string{
+		PriorityClassNames: map[cephv1.KeyType]string{
 			cephv1.KeyOSD: "my-priority-class",
 		},
 		Annotations: cephv1.AnnotationsSpec{
@@ -416,7 +413,8 @@ func testPodDevices(t *testing.T, dataDir, deviceName string, allDevices bool) {
 	}
 
 	// Test shareProcessNamespace presence
-	assert.True(t, deployment.Spec.Template.Spec.HostPID)
+	// If running on Octopus or higher, we don't need to use the host PID namespace
+	assert.False(t, deployment.Spec.Template.Spec.HostPID)
 	if deployment.Spec.Template.Spec.ShareProcessNamespace != nil {
 		panic("ShareProcessNamespace should be nil")
 	}
@@ -425,14 +423,14 @@ func testPodDevices(t *testing.T, dataDir, deviceName string, allDevices bool) {
 	c.spec.LogCollector.Enabled = true
 	deployment, err = c.makeDeployment(osdProp, osd, dataPathMap)
 	assert.NoError(t, err)
-	assert.True(t, deployment.Spec.Template.Spec.HostPID, deployment.Spec.Template.Spec.HostPID)
-	if deployment.Spec.Template.Spec.ShareProcessNamespace != nil {
+	assert.False(t, deployment.Spec.Template.Spec.HostPID, deployment.Spec.Template.Spec.HostPID)
+	if deployment.Spec.Template.Spec.ShareProcessNamespace == nil {
 		panic("ShareProcessNamespace should be nil")
 	}
 
 	// Test hostPID and ShareProcessNamespace
 	{
-		// now set ceph version to nautilus
+		// now set ceph version to octopus
 		clusterInfo := &cephclient.ClusterInfo{
 			Namespace:   "ns",
 			CephVersion: cephver.Octopus,
@@ -452,6 +450,19 @@ func testPodDevices(t *testing.T, dataDir, deviceName string, allDevices bool) {
 		assert.True(t, shareProcessNamespace)
 	}
 
+	t.Run(("check osd ConfigureProbe"), func(t *testing.T) {
+		c.spec.HealthCheck.StartupProbe = make(map[cephv1.KeyType]*cephv1.ProbeSpec)
+		c.spec.HealthCheck.StartupProbe[cephv1.KeyOSD] = &cephv1.ProbeSpec{Disabled: false, Probe: &v1.Probe{InitialDelaySeconds: 1000}}
+		c.spec.HealthCheck.LivenessProbe = make(map[cephv1.KeyType]*cephv1.ProbeSpec)
+		c.spec.HealthCheck.LivenessProbe[cephv1.KeyOSD] = &cephv1.ProbeSpec{Disabled: false, Probe: &v1.Probe{InitialDelaySeconds: 900}}
+		deployment, err := c.makeDeployment(osdProp, osd, dataPathMap)
+		assert.Nil(t, err)
+		assert.NotNil(t, deployment)
+		assert.NotNil(t, deployment.Spec.Template.Spec.Containers[0].LivenessProbe)
+		assert.NotNil(t, deployment.Spec.Template.Spec.Containers[0].StartupProbe)
+		assert.Equal(t, int32(900), deployment.Spec.Template.Spec.Containers[0].LivenessProbe.InitialDelaySeconds)
+		assert.Equal(t, int32(1000), deployment.Spec.Template.Spec.Containers[0].StartupProbe.InitialDelaySeconds)
+	})
 }
 
 func verifyEnvVar(t *testing.T, envVars []v1.EnvVar, expectedName, expectedValue string, expectedFound bool) {
@@ -471,7 +482,7 @@ func TestStorageSpecConfig(t *testing.T) {
 	clientset := fake.NewSimpleClientset()
 	clusterInfo := &cephclient.ClusterInfo{
 		Namespace:   "ns",
-		CephVersion: cephver.Nautilus,
+		CephVersion: cephver.Octopus,
 	}
 	clusterInfo.SetName("testing")
 	clusterInfo.OwnerInfo = cephclient.NewMinimumOwnerInfo(t)
@@ -554,7 +565,7 @@ func TestHostNetwork(t *testing.T) {
 	clientset := fake.NewSimpleClientset()
 	clusterInfo := &cephclient.ClusterInfo{
 		Namespace:   "ns",
-		CephVersion: cephver.Nautilus,
+		CephVersion: cephver.Octopus,
 	}
 	clusterInfo.SetName("test")
 
@@ -713,7 +724,7 @@ func TestOSDPlacement(t *testing.T) {
 	clientset := fake.NewSimpleClientset()
 	clusterInfo := &cephclient.ClusterInfo{
 		Namespace:   "ns",
-		CephVersion: cephver.Nautilus,
+		CephVersion: cephver.Octopus,
 	}
 	clusterInfo.SetName("testing")
 	clusterInfo.OwnerInfo = cephclient.NewMinimumOwnerInfo(t)

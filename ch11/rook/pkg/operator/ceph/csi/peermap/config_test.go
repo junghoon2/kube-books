@@ -160,13 +160,13 @@ const (
 	ns = "rook-ceph-primary"
 )
 
-// #nosec G101 fake token for peer cluster "peer1"
+//nolint:gosec // fake token for peer cluster "peer1"
 var fakeTokenPeer1 = "eyJmc2lkIjoiOWY1MjgyZGItYjg5OS00NTk2LTgwOTgtMzIwYzFmYzM5NmYzIiwiY2xpZW50X2lkIjoicmJkLW1pcnJvci1wZWVyIiwia2V5IjoiQVFBUnczOWQwdkhvQmhBQVlMM1I4RmR5dHNJQU50bkFTZ0lOTVE9PSIsIm1vbl9ob3N0IjoiW3YyOjE5Mi4xNjguMS4zOjY4MjAsdjE6MTkyLjE2OC4xLjM6NjgyMV0iLCAibmFtZXNwYWNlIjogInBlZXIxIn0="
 
-// #nosec G101 fake token for peer cluster "peer2"
+//nolint:gosec // fake token for peer cluster "peer2"
 var fakeTokenPeer2 = "eyJmc2lkIjoiOWY1MjgyZGItYjg5OS00NTk2LTgwOTgtMzIwYzFmYzM5NmYzIiwiY2xpZW50X2lkIjoicmJkLW1pcnJvci1wZWVyIiwia2V5IjoiQVFBUnczOWQwdkhvQmhBQVlMM1I4RmR5dHNJQU50bkFTZ0lOTVE9PSIsIm1vbl9ob3N0IjoiW3YyOjE5Mi4xNjguMS4zOjY4MjAsdjE6MTkyLjE2OC4xLjM6NjgyMV0iLCAibmFtZXNwYWNlIjogInBlZXIyIn0="
 
-// #nosec G101 fake token for peer cluster "peer3"
+//nolint:gosec // fake token for peer cluster "peer3"
 var fakeTokenPeer3 = "eyJmc2lkIjoiOWY1MjgyZGItYjg5OS00NTk2LTgwOTgtMzIwYzFmYzM5NmYzIiwiY2xpZW50X2lkIjoicmJkLW1pcnJvci1wZWVyIiwia2V5IjoiQVFBUnczOWQwdkhvQmhBQVlMM1I4RmR5dHNJQU50bkFTZ0lOTVE9PSIsIm1vbl9ob3N0IjoiW3YyOjE5Mi4xNjguMS4zOjY4MjAsdjE6MTkyLjE2OC4xLjM6NjgyMV0iLCAibmFtZXNwYWNlIjogInBlZXIzIn0="
 
 var peer1Secret = corev1.Secret{
@@ -204,11 +204,13 @@ var fakeSinglePeerCephBlockPool = cephv1.CephBlockPool{
 		Name:      "mirrorPool1",
 		Namespace: ns,
 	},
-	Spec: cephv1.PoolSpec{
-		Mirroring: cephv1.MirroringSpec{
-			Peers: &cephv1.MirroringPeerSpec{
-				SecretNames: []string{
-					"peer1Secret",
+	Spec: cephv1.NamedBlockPoolSpec{
+		PoolSpec: cephv1.PoolSpec{
+			Mirroring: cephv1.MirroringSpec{
+				Peers: &cephv1.MirroringPeerSpec{
+					SecretNames: []string{
+						"peer1Secret",
+					},
 				},
 			},
 		},
@@ -220,13 +222,15 @@ var fakeMultiPeerCephBlockPool = cephv1.CephBlockPool{
 		Name:      "mirrorPool1",
 		Namespace: ns,
 	},
-	Spec: cephv1.PoolSpec{
-		Mirroring: cephv1.MirroringSpec{
-			Peers: &cephv1.MirroringPeerSpec{
-				SecretNames: []string{
-					"peer1Secret",
-					"peer2Secret",
-					"peer3Secret",
+	Spec: cephv1.NamedBlockPoolSpec{
+		PoolSpec: cephv1.PoolSpec{
+			Mirroring: cephv1.MirroringSpec{
+				Peers: &cephv1.MirroringPeerSpec{
+					SecretNames: []string{
+						"peer1Secret",
+						"peer2Secret",
+						"peer3Secret",
+					},
 				},
 			},
 		},
@@ -275,7 +279,7 @@ var mockExecutor = &exectest.MockExecutor{
 }
 
 func TestSinglePeerMappings(t *testing.T) {
-	clusterInfo := &cephclient.ClusterInfo{Namespace: ns}
+	clusterInfo := cephclient.AdminTestClusterInfo(ns)
 	fakeContext := &clusterd.Context{
 		Executor:  mockExecutor,
 		Clientset: test.New(t, 3),
@@ -299,7 +303,7 @@ func TestSinglePeerMappings(t *testing.T) {
 }
 
 func TestMultiPeerMappings(t *testing.T) {
-	clusterInfo := &cephclient.ClusterInfo{Namespace: ns}
+	clusterInfo := cephclient.AdminTestClusterInfo(ns)
 	fakeContext := &clusterd.Context{
 		Executor:  mockExecutor,
 		Clientset: test.New(t, 3),
@@ -358,41 +362,8 @@ func TestDecodePeerToken(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func fakeOperatorPod() *corev1.Pod {
-	p := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
-			Namespace: ns,
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					Kind: "ReplicaSet",
-					Name: "testReplicaSet",
-				},
-			},
-		},
-		Spec: corev1.PodSpec{},
-	}
-	return p
-}
-
-func fakeReplicaSet() *appsv1.ReplicaSet {
-	r := &appsv1.ReplicaSet{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "testReplicaSet",
-			Namespace: ns,
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					Kind: "Deployment",
-				},
-			},
-		},
-	}
-
-	return r
-}
-
 func TestCreateOrUpdateConfig(t *testing.T) {
-	os.Setenv("POD_NAME", "test")
+	os.Setenv("POD_NAME", "rook-ceph-operator")
 	defer os.Setenv("POD_NAME", "")
 	os.Setenv("POD_NAMESPACE", ns)
 	defer os.Setenv("POD_NAMESPACE", "")
@@ -414,15 +385,15 @@ func TestCreateOrUpdateConfig(t *testing.T) {
 	}
 
 	// Create fake pod
-	_, err = fakeContext.Clientset.CoreV1().Pods(ns).Create(context.TODO(), fakeOperatorPod(), metav1.CreateOptions{})
+	_, err = fakeContext.Clientset.CoreV1().Pods(ns).Create(context.TODO(), test.FakeOperatorPod(ns), metav1.CreateOptions{})
 	assert.NoError(t, err)
 
 	// Create fake replicaset
-	_, err = fakeContext.Clientset.AppsV1().ReplicaSets(ns).Create(context.TODO(), fakeReplicaSet(), metav1.CreateOptions{})
+	_, err = fakeContext.Clientset.AppsV1().ReplicaSets(ns).Create(context.TODO(), test.FakeReplicaSet(ns), metav1.CreateOptions{})
 	assert.NoError(t, err)
 
 	// Create empty ID mapping configMap
-	err = CreateOrUpdateConfig(fakeContext, &PeerIDMappings{})
+	err = CreateOrUpdateConfig(context.TODO(), fakeContext, &PeerIDMappings{})
 	assert.NoError(t, err)
 	validateConfig(t, fakeContext, PeerIDMappings{})
 
@@ -438,7 +409,7 @@ func TestCreateOrUpdateConfig(t *testing.T) {
 		},
 	}
 
-	err = CreateOrUpdateConfig(fakeContext, actualMappings)
+	err = CreateOrUpdateConfig(context.TODO(), fakeContext, actualMappings)
 	assert.NoError(t, err)
 	//validateConfig(t, fakeContext, actualMappings)
 
@@ -453,7 +424,7 @@ func TestCreateOrUpdateConfig(t *testing.T) {
 		},
 	})
 
-	err = CreateOrUpdateConfig(fakeContext, &mappings)
+	err = CreateOrUpdateConfig(context.TODO(), fakeContext, &mappings)
 	assert.NoError(t, err)
 	validateConfig(t, fakeContext, mappings)
 }

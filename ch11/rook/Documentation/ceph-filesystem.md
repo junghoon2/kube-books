@@ -36,7 +36,8 @@ spec:
     replicated:
       size: 3
   dataPools:
-    - replicated:
+    - name: replicated
+      replicated:
         size: 3
   preserveFilesystemOnDelete: true
   metadataServer:
@@ -79,8 +80,6 @@ ceph status
 Before Rook can start provisioning storage, a StorageClass needs to be created based on the filesystem. This is needed for Kubernetes to interoperate
 with the CSI driver to create persistent volumes.
 
-> **NOTE**: This example uses the CSI driver, which is the preferred driver going forward for K8s 1.13 and newer. Examples are found in the [CSI CephFS](https://github.com/rook/rook/tree/{{ branchName }}/cluster/examples/kubernetes/ceph/csi/cephfs) directory. For an example of a volume using the flex driver (required for K8s 1.12 and earlier), see the [Flex Driver](#flex-driver) section below.
-
 Save this storage class definition as `storageclass.yaml`:
 
 ```yaml
@@ -91,7 +90,8 @@ metadata:
 # Change "rook-ceph" provisioner prefix to match the operator namespace if needed
 provisioner: rook-ceph.cephfs.csi.ceph.com
 parameters:
-  # clusterID is the namespace where operator is deployed.
+  # clusterID is the namespace where the rook cluster is running
+  # If you change this namespace, also change the namespace below where the secret namespaces are defined
   clusterID: rook-ceph
 
   # CephFS filesystem name into which the volume shall be created
@@ -99,7 +99,7 @@ parameters:
 
   # Ceph pool into which the volume shall be created
   # Required for provisionVolume: "true"
-  pool: myfs-data0
+  pool: myfs-replicated
 
   # The secrets contain Ceph admin credentials. These are generated automatically by the operator
   # in the same namespace as the cluster.
@@ -121,7 +121,7 @@ provisioner value should be "rook-op.rbd.csi.ceph.com".
 Create the storage class.
 
 ```console
-kubectl create -f cluster/examples/kubernetes/ceph/csi/cephfs/storageclass.yaml
+kubectl create -f deploy/examples/csi/cephfs/storageclass.yaml
 ```
 
 ## Quotas
@@ -214,7 +214,7 @@ spec:
 Create the Kube registry deployment:
 
 ```console
-kubectl create -f cluster/examples/kubernetes/ceph/csi/cephfs/kube-registry.yaml
+kubectl create -f deploy/examples/csi/cephfs/kube-registry.yaml
 ```
 
 You now have a docker registry which is HA with persistent storage.
@@ -244,10 +244,6 @@ kubectl -n rook-ceph delete cephfilesystem myfs
 ```
 
 Note: If the "preserveFilesystemOnDelete" filesystem attribute is set to true, the above command won't delete the filesystem. Recreating the same CRD will reuse the existing filesystem.
-
-## Flex Driver
-
-To create a volume based on the flex driver instead of the CSI driver, see the [kube-registry.yaml](https://github.com/rook/rook/blob/{{ branchName }}/cluster/examples/kubernetes/ceph/flex/kube-registry.yaml) example manifest or refer to the complete flow in the Rook v1.0 [Shared Filesystem](https://rook.io/docs/rook/v1.0/ceph-filesystem.html) documentation.
 
 ### Advanced Example: Erasure Coded Filesystem
 

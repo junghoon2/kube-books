@@ -68,7 +68,7 @@ func TestStartDiscoveryDaemonset(t *testing.T) {
 	_, err := clientset.CoreV1().Pods("rook-system").Create(ctx, &pod, metav1.CreateOptions{})
 	assert.NoError(t, err)
 	// start a basic cluster
-	err = a.Start(namespace, "rook/rook:myversion", "mysa", false)
+	err = a.Start(ctx, namespace, "rook/rook:myversion", "mysa", false)
 	assert.Nil(t, err)
 
 	// check daemonset parameters
@@ -79,6 +79,7 @@ func TestStartDiscoveryDaemonset(t *testing.T) {
 	assert.Equal(t, "mysa", agentDS.Spec.Template.Spec.ServiceAccountName)
 	assert.Equal(t, "my-priority-class", agentDS.Spec.Template.Spec.PriorityClassName)
 	assert.True(t, *agentDS.Spec.Template.Spec.Containers[0].SecurityContext.Privileged)
+	assert.Equal(t, int64(0), *agentDS.Spec.Template.Spec.Containers[0].SecurityContext.RunAsUser)
 	volumes := agentDS.Spec.Template.Spec.Volumes
 	assert.Equal(t, 3, len(volumes))
 	volumeMounts := agentDS.Spec.Template.Spec.Containers[0].VolumeMounts
@@ -129,15 +130,15 @@ func TestGetAvailableDevices(t *testing.T) {
 		},
 	}
 
-	nodeDevices, err := ListDevices(context, ns, "" /* all nodes */)
+	nodeDevices, err := ListDevices(ctx, context, ns, "" /* all nodes */)
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(nodeDevices))
 
-	devices, err := GetAvailableDevices(context, nodeName, ns, d, "^sd.", pvcBackedOSD)
+	devices, err := GetAvailableDevices(ctx, context, nodeName, ns, d, "^sd.", pvcBackedOSD)
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(devices))
 	// devices should be in use now, 2nd try gets the same list
-	devices, err = GetAvailableDevices(context, nodeName, ns, d, "^sd.", pvcBackedOSD)
+	devices, err = GetAvailableDevices(ctx, context, nodeName, ns, d, "^sd.", pvcBackedOSD)
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(devices))
 }

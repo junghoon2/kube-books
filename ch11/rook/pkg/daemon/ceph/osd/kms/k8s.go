@@ -17,7 +17,6 @@ limitations under the License.
 package kms
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/pkg/errors"
@@ -29,27 +28,25 @@ import (
 )
 
 const (
-	// OsdEncryptionSecretNameKeyName is the key name of the Secret that contains the OSD encryption key
-	// #nosec G101 since this is not leaking any hardcoded credentials, it's just the secret key name
+	//nolint:gosec // OsdEncryptionSecretNameKeyName is the key name of the Secret that contains the OSD encryption key
 	OsdEncryptionSecretNameKeyName = "dmcrypt-key"
 
-	// #nosec G101 since this is not leaking any hardcoded credentials, it's just the prefix of the secret name
+	//nolint:gosec // since this is not leaking any hardcoded credentials, it's just the prefix of the secret name
 	osdEncryptionSecretNamePrefix = "rook-ceph-osd-encryption-key"
 
-	// KMSTokenSecretNameKey is the key name of the Secret that contains the KMS authentication token
+	//nolint:gosec // KMSTokenSecretNameKey is the key name of the Secret that contains the KMS authentication token,
 	KMSTokenSecretNameKey = "token"
 )
 
 // storeSecretInKubernetes stores the dmcrypt key in a Kubernetes Secret
 func (c *Config) storeSecretInKubernetes(pvcName, key string) error {
-	ctx := context.TODO()
-	s, err := generateOSDEncryptedKeySecret(pvcName, key, c.clusterInfo)
+	s, err := generateOSDEncryptedKeySecret(pvcName, key, c.ClusterInfo)
 	if err != nil {
 		return err
 	}
 
 	// Create the Kubernetes Secret
-	_, err = c.context.Clientset.CoreV1().Secrets(c.clusterInfo.Namespace).Create(ctx, s, metav1.CreateOptions{})
+	_, err = c.context.Clientset.CoreV1().Secrets(c.ClusterInfo.Namespace).Create(c.ClusterInfo.Context, s, metav1.CreateOptions{})
 	if err != nil && !kerrors.IsAlreadyExists(err) {
 		return errors.Wrapf(err, "failed to save ceph osd encryption key as a secret for pvc %q", pvcName)
 	}

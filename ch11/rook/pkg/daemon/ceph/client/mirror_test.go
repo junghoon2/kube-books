@@ -50,7 +50,7 @@ func TestCreateRBDMirrorBootstrapPeer(t *testing.T) {
 		return "", errors.New("unknown command")
 	}
 	context := &clusterd.Context{Executor: executor}
-	c := AdminClusterInfo("mycluster")
+	c := AdminTestClusterInfo("mycluster")
 	c.FSID = "4fe04ebb-ec0c-46c2-ac55-9eb52ebbfb82"
 
 	token, err := CreateRBDMirrorBootstrapPeer(context, c, pool)
@@ -58,22 +58,26 @@ func TestCreateRBDMirrorBootstrapPeer(t *testing.T) {
 	assert.Equal(t, bootstrapPeerToken, string(token))
 }
 func TestEnablePoolMirroring(t *testing.T) {
-	pool := "pool-test"
-	poolSpec := cephv1.PoolSpec{Mirroring: cephv1.MirroringSpec{Mode: "image"}}
+	pool := cephv1.NamedPoolSpec{
+		Name: "pool-test",
+		PoolSpec: cephv1.PoolSpec{
+			Mirroring: cephv1.MirroringSpec{Mode: "image"},
+		},
+	}
 	executor := &exectest.MockExecutor{}
 	executor.MockExecuteCommandWithOutput = func(command string, args ...string) (string, error) {
 		if args[0] == "mirror" {
 			assert.Equal(t, "pool", args[1])
 			assert.Equal(t, "enable", args[2])
-			assert.Equal(t, pool, args[3])
-			assert.Equal(t, poolSpec.Mirroring.Mode, args[4])
+			assert.Equal(t, pool.Name, args[3])
+			assert.Equal(t, pool.Mirroring.Mode, args[4])
 			return "", nil
 		}
 		return "", errors.New("unknown command")
 	}
 	context := &clusterd.Context{Executor: executor}
 
-	err := enablePoolMirroring(context, AdminClusterInfo("mycluster"), poolSpec, pool)
+	err := enablePoolMirroring(context, AdminTestClusterInfo("mycluster"), pool)
 	assert.NoError(t, err)
 }
 
@@ -91,7 +95,7 @@ func TestGetPoolMirroringStatus(t *testing.T) {
 	}
 	context := &clusterd.Context{Executor: executor}
 
-	poolMirrorStatus, err := GetPoolMirroringStatus(context, AdminClusterInfo("mycluster"), pool)
+	poolMirrorStatus, err := GetPoolMirroringStatus(context, AdminTestClusterInfo("mycluster"), pool)
 	assert.NoError(t, err)
 	assert.Equal(t, "WARNING", poolMirrorStatus.Summary.Health)
 	assert.Equal(t, "OK", poolMirrorStatus.Summary.DaemonHealth)
@@ -114,7 +118,7 @@ func TestImportRBDMirrorBootstrapPeer(t *testing.T) {
 	}
 	context := &clusterd.Context{Executor: executor}
 
-	err := ImportRBDMirrorBootstrapPeer(context, AdminClusterInfo("mycluster"), pool, "", []byte(bootstrapPeerToken))
+	err := ImportRBDMirrorBootstrapPeer(context, AdminTestClusterInfo("mycluster"), pool, "", []byte(bootstrapPeerToken))
 	assert.NoError(t, err)
 
 	executor.MockExecuteCommandWithOutput = func(command string, args ...string) (string, error) {
@@ -132,7 +136,7 @@ func TestImportRBDMirrorBootstrapPeer(t *testing.T) {
 		return "", errors.New("unknown command")
 	}
 	context = &clusterd.Context{Executor: executor}
-	err = ImportRBDMirrorBootstrapPeer(context, AdminClusterInfo("mycluster"), pool, "rx-tx", []byte(bootstrapPeerToken))
+	err = ImportRBDMirrorBootstrapPeer(context, AdminTestClusterInfo("mycluster"), pool, "rx-tx", []byte(bootstrapPeerToken))
 	assert.NoError(t, err)
 }
 
@@ -150,7 +154,7 @@ func TestGetPoolMirroringInfo(t *testing.T) {
 	}
 	context := &clusterd.Context{Executor: executor}
 
-	poolMirrorInfo, err := GetPoolMirroringInfo(context, AdminClusterInfo("mycluster"), pool)
+	poolMirrorInfo, err := GetPoolMirroringInfo(context, AdminTestClusterInfo("mycluster"), pool)
 	assert.NoError(t, err)
 	assert.Equal(t, "image", poolMirrorInfo.Mode)
 	assert.Equal(t, 1, len(poolMirrorInfo.Peers))
@@ -180,7 +184,7 @@ func TestEnableSnapshotSchedule(t *testing.T) {
 		context := &clusterd.Context{Executor: executor}
 		poolSpec := &cephv1.PoolSpec{Mirroring: cephv1.MirroringSpec{SnapshotSchedules: []cephv1.SnapshotScheduleSpec{{Interval: interval}}}}
 
-		err := enableSnapshotSchedule(context, AdminClusterInfo("mycluster"), poolSpec.Mirroring.SnapshotSchedules[0], pool)
+		err := enableSnapshotSchedule(context, AdminTestClusterInfo("mycluster"), poolSpec.Mirroring.SnapshotSchedules[0], pool)
 		assert.NoError(t, err)
 	}
 
@@ -206,7 +210,7 @@ func TestEnableSnapshotSchedule(t *testing.T) {
 		context := &clusterd.Context{Executor: executor}
 		poolSpec := &cephv1.PoolSpec{Mirroring: cephv1.MirroringSpec{SnapshotSchedules: []cephv1.SnapshotScheduleSpec{{Interval: interval, StartTime: startTime}}}}
 
-		err := enableSnapshotSchedule(context, AdminClusterInfo("mycluster"), poolSpec.Mirroring.SnapshotSchedules[0], pool)
+		err := enableSnapshotSchedule(context, AdminTestClusterInfo("mycluster"), poolSpec.Mirroring.SnapshotSchedules[0], pool)
 		assert.NoError(t, err)
 	}
 }
@@ -228,7 +232,7 @@ func TestListSnapshotSchedules(t *testing.T) {
 	}
 	context := &clusterd.Context{Executor: executor}
 
-	snapshotScheduleStatus, err := listSnapshotSchedules(context, AdminClusterInfo("mycluster"), pool)
+	snapshotScheduleStatus, err := listSnapshotSchedules(context, AdminTestClusterInfo("mycluster"), pool)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(snapshotScheduleStatus))
 }
@@ -251,7 +255,7 @@ func TestListSnapshotSchedulesRecursively(t *testing.T) {
 	}
 	context := &clusterd.Context{Executor: executor}
 
-	snapshotScheduleStatus, err := ListSnapshotSchedulesRecursively(context, AdminClusterInfo("mycluster"), pool)
+	snapshotScheduleStatus, err := ListSnapshotSchedulesRecursively(context, AdminTestClusterInfo("mycluster"), pool)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(snapshotScheduleStatus))
 }
@@ -274,12 +278,11 @@ func TestRemoveSnapshotSchedule(t *testing.T) {
 	context := &clusterd.Context{Executor: executor}
 
 	snapScheduleResponse := cephv1.SnapshotSchedule{StartTime: "14:00:00-05:00", Interval: "1d"}
-	err := removeSnapshotSchedule(context, AdminClusterInfo("mycluster"), snapScheduleResponse, pool)
+	err := removeSnapshotSchedule(context, AdminTestClusterInfo("mycluster"), snapScheduleResponse, pool)
 	assert.NoError(t, err)
 }
 
 func TestRemoveSnapshotSchedules(t *testing.T) {
-	pool := "pool-test"
 	interval := "24h"
 	startTime := "14:00:00-05:00"
 	executor := &exectest.MockExecutor{}
@@ -297,8 +300,17 @@ func TestRemoveSnapshotSchedules(t *testing.T) {
 	}
 
 	context := &clusterd.Context{Executor: executor}
-	poolSpec := &cephv1.PoolSpec{Mirroring: cephv1.MirroringSpec{SnapshotSchedules: []cephv1.SnapshotScheduleSpec{{Interval: interval, StartTime: startTime}}}}
-	err := removeSnapshotSchedules(context, AdminClusterInfo("mycluster"), *poolSpec, pool)
+	pool := cephv1.NamedPoolSpec{
+		Name: "pool-test",
+		PoolSpec: cephv1.PoolSpec{
+			Mirroring: cephv1.MirroringSpec{
+				SnapshotSchedules: []cephv1.SnapshotScheduleSpec{
+					{Interval: interval, StartTime: startTime},
+				},
+			},
+		},
+	}
+	err := removeSnapshotSchedules(context, AdminTestClusterInfo("mycluster"), pool)
 	assert.NoError(t, err)
 }
 
@@ -316,7 +328,7 @@ func TestDisableMirroring(t *testing.T) {
 	}
 	context := &clusterd.Context{Executor: executor}
 
-	err := disablePoolMirroring(context, AdminClusterInfo("mycluster"), pool)
+	err := disablePoolMirroring(context, AdminTestClusterInfo("mycluster"), pool)
 	assert.NoError(t, err)
 }
 
@@ -337,6 +349,6 @@ func TestRemoveClusterPeer(t *testing.T) {
 	}
 	context := &clusterd.Context{Executor: executor}
 
-	err := removeClusterPeer(context, AdminClusterInfo("mycluster"), pool, peerUUID)
+	err := removeClusterPeer(context, AdminTestClusterInfo("mycluster"), pool, peerUUID)
 	assert.NoError(t, err)
 }

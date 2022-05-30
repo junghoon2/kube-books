@@ -103,10 +103,10 @@ Each operator pod would watch the same custom resource types with their own indi
 
 For storage backends that fit the patterns that [Metacontroller](https://github.com/GoogleCloudPlatform/metacontroller) supports (`CompositeController` and `DecoratorController`), this could be an option to incorporate into Rook.
 Basically, a storage backend defines their custom types and the parent/child relationships between them.
-The metacontroller handles all the K8s API interactions and regularly calls into storage backend defined “hooks”.
+The metacontroller handles all the K8s API interactions and regularly calls into storage backend defined "hooks".
 The storage backend is given JSON representing the current state in K8s types and then returns JSON defining in K8s types what the desired state should be.
 The metacontroller then makes that desired state a reality via the K8s API.
-This pattern does allow for fairly complicated stateful apps (e.g. [Vitess](https://github.com/GoogleCloudPlatform/metacontroller/tree/master/examples/vitess)) that have well defined parent/children hierarchies, and can allow for the storage backend operator to perform “imperative” operations to manipulate cluster state by launching Jobs.
+This pattern does allow for fairly complicated stateful apps (e.g. [Vitess](https://github.com/GoogleCloudPlatform/metacontroller/tree/master/examples/vitess)) that have well defined parent/children hierarchies, and can allow for the storage backend operator to perform "imperative" operations to manipulate cluster state by launching Jobs.
 
 ### Recommendation
 
@@ -337,37 +337,10 @@ Multiple container images can easily be built from the single source repository,
 
 #### Layout
 
-The current `rook/rook` repository layout appears to be sufficiently factored to enable multiple storage backend support.
-Some additional directories will be added to support new API versions, new custom resource types, and new storage backends.
-A source code layout that includes these new additions is shown below, annotated with comments about the use of each important directory:
-
-```text
-- cmd # binaries with main entry points
-  - rook # main command entry points for operators and daemons
-    - ceph
-  - rookflex
-- pkg
-  - apis
-    - rook.io # rook.io API group of common types, additional groups would be sibling dirs
-      - v1 # existing version of the v1 Rook API
-      - v1alpha2 # types for the flex driver that have been deprecated
-    - cassandra.rook.io
-      - v1alpha1
-    - ceph.rook.io  # ceph specific specs for cluster, file, object
-      - v1
-  - client
-    - clientset # generated strongly typed client code to access Rook APIs
-  - daemon # daemons for each storage backend
-    - ceph
-    - discover
-  - operator # all orchestration logic and custom controllers for each storage backend
-    - cassandra
-    - ceph
-      - cluster
-      - file
-      - object
-      - pool
-```
+Each storage provider has its own Rook repo.
+- [Cassandra](https://github.com/rook/cassandra)
+- [Ceph](https://github.com/rook/rook)
+- [NFS](https://github.com/rook/nfs)
 
 ## Summary
 

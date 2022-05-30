@@ -28,6 +28,7 @@ import (
 	cephclient "github.com/rook/rook/pkg/daemon/ceph/client"
 	cephutil "github.com/rook/rook/pkg/daemon/ceph/util"
 	"github.com/rook/rook/pkg/operator/ceph/controller"
+	"github.com/rook/rook/pkg/operator/ceph/version"
 	"github.com/rook/rook/pkg/operator/k8sutil"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,6 +45,8 @@ var (
 	timeZero                       = time.Duration(0)
 	// Check whether mons are on the same node once per operator restart since it's a rare scheduling condition
 	needToCheckMonsOnSameNode = true
+	// Version of Ceph where the arbiter failover is supported
+	arbiterFailoverSupportedCephVersion = version.CephVersion{Major: 16, Minor: 2, Extra: 7}
 )
 
 // HealthChecker aggregates the mon/cluster info needed to check the health of the monitors
@@ -109,20 +112,30 @@ func NewHealthChecker(monCluster *Cluster) *HealthChecker {
 }
 
 // Check periodically checks the health of the monitors
-func (hc *HealthChecker) Check(stopCh chan struct{}) {
+func (hc *HealthChecker) Check(monitoringRoutines map[string]*controller.ClusterHealth, daemon string) {
 	for {
 		// Update Mon Timeout with CR details
 		updateMonTimeout(hc.monCluster)
+
 		// Update Mon Interval with CR details
 		updateMonInterval(hc.monCluster, hc)
+
+		// We must perform this check otherwise the case will check an index that does not exist anymore and
+		// we will get an invalid pointer error and the go routine will panic
+		if _, ok := monitoringRoutines[daemon]; !ok {
+			logger.Infof("ceph cluster %q has been deleted. stopping monitoring of mons", hc.monCluster.Namespace)
+			return
+		}
+
 		select {
-		case <-stopCh:
+		case <-monitoringRoutines[daemon].InternalCtx.Done():
 			logger.Infof("stopping monitoring of mons in namespace %q", hc.monCluster.Namespace)
+			delete(monitoringRoutines, daemon)
 			return
 
 		case <-time.After(hc.interval):
 			logger.Debugf("checking health of mons")
-			err := hc.monCluster.checkHealth()
+			err := hc.monCluster.checkHealth(monitoringRoutines[daemon].InternalCtx)
 			if err != nil {
 				logger.Warningf("failed to check mon health. %v", err)
 			}
@@ -130,7 +143,7 @@ func (hc *HealthChecker) Check(stopCh chan struct{}) {
 	}
 }
 
-func (c *Cluster) checkHealth() error {
+func (c *Cluster) checkHealth(ctx context.Context) error {
 	c.acquireOrchestrationLock()
 	defer c.releaseOrchestrationLock()
 
@@ -250,7 +263,7 @@ func (c *Cluster) checkHealth() error {
 
 		// retry only once before the mon failover if the mon pod is not scheduled
 		monLabelSelector := fmt.Sprintf("%s=%s,%s=%s", k8sutil.AppAttr, AppName, controller.DaemonIDLabel, mon.Name)
-		isScheduled, err := k8sutil.IsPodScheduled(c.context.Clientset, c.Namespace, monLabelSelector)
+		isScheduled, err := k8sutil.IsPodScheduled(ctx, c.context.Clientset, c.Namespace, monLabelSelector)
 		if err != nil {
 			logger.Warningf("failed to check if mon %q is assigned to a node, continuing with mon failover. %v", mon.Name, err)
 		} else if !isScheduled && retriesBeforeNodeDrainFailover > 0 {
@@ -322,36 +335,50 @@ func (c *Cluster) failMon(monCount, desiredMonCount int, name string) bool {
 		if err := c.removeMon(name); err != nil {
 			logger.Errorf("failed to remove mon %q. %v", name, err)
 		}
-	} else {
-		if c.spec.IsStretchCluster() && name == c.arbiterMon {
-			// Ceph does not currently support updating the arbiter mon
-			// or else the mons in the two datacenters will not be aware anymore
-			// of the arbiter mon. Thus, disabling failover until the arbiter
-			// mon can be updated in ceph.
-			logger.Warningf("refusing to failover arbiter mon %q on a stretched cluster", name)
-			return false
-		}
+		return true
+	}
 
-		// prevent any voluntary mon drain while failing over
-		if err := c.blockMonDrain(types.NamespacedName{Name: monPDBName, Namespace: c.Namespace}); err != nil {
-			logger.Errorf("failed to block mon drain. %v", err)
-		}
+	if err := c.allowFailover(name); err != nil {
+		logger.Warningf("aborting mon %q failover. %v", name, err)
+		return false
+	}
 
-		// bring up a new mon to replace the unhealthy mon
-		if err := c.failoverMon(name); err != nil {
-			logger.Errorf("failed to failover mon %q. %v", name, err)
-		}
+	// prevent any voluntary mon drain while failing over
+	if err := c.blockMonDrain(types.NamespacedName{Name: monPDBName, Namespace: c.Namespace}); err != nil {
+		logger.Errorf("failed to block mon drain. %v", err)
+	}
 
-		// allow any voluntary mon drain after failover
-		if err := c.allowMonDrain(types.NamespacedName{Name: monPDBName, Namespace: c.Namespace}); err != nil {
-			logger.Errorf("failed to allow mon drain. %v", err)
-		}
+	// bring up a new mon to replace the unhealthy mon
+	if err := c.failoverMon(name); err != nil {
+		logger.Errorf("failed to failover mon %q. %v", name, err)
+	}
+
+	// allow any voluntary mon drain after failover
+	if err := c.allowMonDrain(types.NamespacedName{Name: monPDBName, Namespace: c.Namespace}); err != nil {
+		logger.Errorf("failed to allow mon drain. %v", err)
 	}
 	return true
 }
 
+func (c *Cluster) allowFailover(name string) error {
+	if !c.spec.IsStretchCluster() {
+		// always failover if not a stretch cluster
+		return nil
+	}
+	if name != c.arbiterMon {
+		// failover if it's a non-arbiter
+		return nil
+	}
+	if c.ClusterInfo.CephVersion.IsAtLeast(arbiterFailoverSupportedCephVersion) {
+		// failover the arbiter if at least v16.2.7
+		return nil
+	}
+
+	// Ceph does not support updating the arbiter mon in older versions
+	return errors.Errorf("refusing to failover arbiter mon %q on a stretched cluster until upgrading to ceph version %s", name, arbiterFailoverSupportedCephVersion.String())
+}
+
 func (c *Cluster) removeOrphanMonResources() {
-	ctx := context.TODO()
 	if c.spec.Mon.VolumeClaimTemplate == nil {
 		logger.Debug("skipping check for orphaned mon pvcs since using the host path")
 		return
@@ -360,7 +387,7 @@ func (c *Cluster) removeOrphanMonResources() {
 	logger.Info("checking for orphaned mon resources")
 
 	opts := metav1.ListOptions{LabelSelector: fmt.Sprintf("%s=%s", k8sutil.AppAttr, AppName)}
-	pvcs, err := c.context.Clientset.CoreV1().PersistentVolumeClaims(c.Namespace).List(ctx, opts)
+	pvcs, err := c.context.Clientset.CoreV1().PersistentVolumeClaims(c.Namespace).List(c.ClusterInfo.Context, opts)
 	if err != nil {
 		logger.Infof("failed to check for orphaned mon pvcs. %v", err)
 		return
@@ -369,7 +396,7 @@ func (c *Cluster) removeOrphanMonResources() {
 	for _, pvc := range pvcs.Items {
 		logger.Debugf("checking if pvc %q is orphaned", pvc.Name)
 
-		_, err := c.context.Clientset.AppsV1().Deployments(c.Namespace).Get(ctx, pvc.Name, metav1.GetOptions{})
+		_, err := c.context.Clientset.AppsV1().Deployments(c.Namespace).Get(c.ClusterInfo.Context, pvc.Name, metav1.GetOptions{})
 		if err == nil {
 			logger.Debugf("skipping pvc removal since the mon daemon %q still requires it", pvc.Name)
 			continue
@@ -383,7 +410,7 @@ func (c *Cluster) removeOrphanMonResources() {
 		var gracePeriod int64 // delete immediately
 		propagation := metav1.DeletePropagationForeground
 		options := &metav1.DeleteOptions{GracePeriodSeconds: &gracePeriod, PropagationPolicy: &propagation}
-		err = c.context.Clientset.CoreV1().PersistentVolumeClaims(c.Namespace).Delete(ctx, pvc.Name, *options)
+		err = c.context.Clientset.CoreV1().PersistentVolumeClaims(c.Namespace).Delete(c.ClusterInfo.Context, pvc.Name, *options)
 		if err != nil {
 			logger.Warningf("failed to delete orphaned monitor pvc %q. %v", pvc.Name, err)
 		}
@@ -391,9 +418,8 @@ func (c *Cluster) removeOrphanMonResources() {
 }
 
 func (c *Cluster) updateMonDeploymentReplica(name string, enabled bool) error {
-	ctx := context.TODO()
 	// get the existing deployment
-	d, err := c.context.Clientset.AppsV1().Deployments(c.Namespace).Get(ctx, resourceName(name), metav1.GetOptions{})
+	d, err := c.context.Clientset.AppsV1().Deployments(c.Namespace).Get(c.ClusterInfo.Context, resourceName(name), metav1.GetOptions{})
 	if err != nil {
 		return errors.Wrapf(err, "failed to get mon %q", name)
 	}
@@ -408,7 +434,7 @@ func (c *Cluster) updateMonDeploymentReplica(name string, enabled bool) error {
 
 	// update the deployment
 	logger.Infof("scaling the mon %q deployment to replica %d", name, desiredReplicas)
-	_, err = c.context.Clientset.AppsV1().Deployments(c.Namespace).Update(ctx, d, metav1.UpdateOptions{})
+	_, err = c.context.Clientset.AppsV1().Deployments(c.Namespace).Update(c.ClusterInfo.Context, d, metav1.UpdateOptions{})
 	if err != nil {
 		return errors.Wrapf(err, "failed to update mon %q replicas from %d to %d", name, originalReplicas, desiredReplicas)
 	}
@@ -437,6 +463,7 @@ func (c *Cluster) failoverMon(name string) error {
 
 	// remove the failed mon from a local list of the existing mons for finding a stretch zone
 	existingMons := c.clusterInfoToMonConfig(name)
+
 	zone, err := c.findAvailableZoneIfStretched(existingMons)
 	if err != nil {
 		return errors.Wrap(err, "failed to find available stretch zone")
@@ -476,11 +503,9 @@ func (c *Cluster) failoverMon(name string) error {
 
 	// Assign to a zone if a stretch cluster
 	if c.spec.IsStretchCluster() {
-		if name == c.arbiterMon {
-			// Update the arbiter mon for the stretch cluster if it changed
-			if err := c.ConfigureArbiter(); err != nil {
-				return errors.Wrap(err, "failed to configure stretch arbiter")
-			}
+		// Update the arbiter mon for the stretch cluster if it changed
+		if err := c.ConfigureArbiter(); err != nil {
+			return errors.Wrap(err, "failed to configure stretch arbiter")
 		}
 	}
 
@@ -493,7 +518,6 @@ func (c *Cluster) failoverMon(name string) error {
 
 // make a best effort to remove the mon and all its resources
 func (c *Cluster) removeMon(daemonName string) error {
-	ctx := context.TODO()
 	logger.Infof("ensuring removal of unhealthy monitor %s", daemonName)
 
 	resourceName := resourceName(daemonName)
@@ -502,7 +526,7 @@ func (c *Cluster) removeMon(daemonName string) error {
 	var gracePeriod int64
 	propagation := metav1.DeletePropagationForeground
 	options := &metav1.DeleteOptions{GracePeriodSeconds: &gracePeriod, PropagationPolicy: &propagation}
-	if err := c.context.Clientset.AppsV1().Deployments(c.Namespace).Delete(ctx, resourceName, *options); err != nil {
+	if err := c.context.Clientset.AppsV1().Deployments(c.Namespace).Delete(c.ClusterInfo.Context, resourceName, *options); err != nil {
 		if kerrors.IsNotFound(err) {
 			logger.Infof("dead mon %s was already gone", resourceName)
 		} else {
@@ -519,7 +543,7 @@ func (c *Cluster) removeMon(daemonName string) error {
 	delete(c.mapping.Schedule, daemonName)
 
 	// Remove the service endpoint
-	if err := c.context.Clientset.CoreV1().Services(c.Namespace).Delete(ctx, resourceName, *options); err != nil {
+	if err := c.context.Clientset.CoreV1().Services(c.Namespace).Delete(c.ClusterInfo.Context, resourceName, *options); err != nil {
 		if kerrors.IsNotFound(err) {
 			logger.Infof("dead mon service %s was already gone", resourceName)
 		} else {
@@ -528,7 +552,7 @@ func (c *Cluster) removeMon(daemonName string) error {
 	}
 
 	// Remove the PVC backing the mon if it existed
-	if err := c.context.Clientset.CoreV1().PersistentVolumeClaims(c.Namespace).Delete(ctx, resourceName, metav1.DeleteOptions{}); err != nil {
+	if err := c.context.Clientset.CoreV1().PersistentVolumeClaims(c.Namespace).Delete(c.ClusterInfo.Context, resourceName, metav1.DeleteOptions{}); err != nil {
 		if kerrors.IsNotFound(err) {
 			logger.Infof("mon pvc did not exist %q", resourceName)
 		} else {
@@ -666,7 +690,7 @@ func (c *Cluster) evictMonIfMultipleOnSameNode() error {
 
 	// Get all the mon pods
 	label := fmt.Sprintf("app=%s", AppName)
-	pods, err := c.context.Clientset.CoreV1().Pods(c.Namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: label})
+	pods, err := c.context.Clientset.CoreV1().Pods(c.Namespace).List(c.ClusterInfo.Context, metav1.ListOptions{LabelSelector: label})
 	if err != nil {
 		return errors.Wrap(err, "failed to list mon pods")
 	}

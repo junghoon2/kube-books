@@ -66,10 +66,21 @@ type deviceSet struct {
 	Encrypted bool
 }
 
+// PrepareStorageClassDeviceSets is only exposed for testing purposes
+func (c *Cluster) PrepareStorageClassDeviceSets() error {
+	errors := newProvisionErrors()
+	c.prepareStorageClassDeviceSets(errors)
+	if len(errors.errors) > 0 {
+		// return the first error
+		return errors.errors[0]
+	}
+	return nil
+}
+
 func (c *Cluster) prepareStorageClassDeviceSets(errs *provisionErrors) {
 	c.deviceSets = []deviceSet{}
 
-	existingPVCs, uniqueOSDsPerDeviceSet, err := GetExistingPVCs(c.context, c.clusterInfo.Namespace)
+	existingPVCs, uniqueOSDsPerDeviceSet, err := GetExistingPVCs(c.clusterInfo.Context, c.context, c.clusterInfo.Namespace)
 	if err != nil {
 		errs.addError("failed to detect existing OSD PVCs. %v", err)
 		return
@@ -189,7 +200,6 @@ func (c *Cluster) createDeviceSetPVCsForIndex(newDeviceSet cephv1.StorageClassDe
 }
 
 func (c *Cluster) createDeviceSetPVC(existingPVCs map[string]*v1.PersistentVolumeClaim, deviceSetName string, pvcTemplate v1.PersistentVolumeClaim, setIndex int) (*v1.PersistentVolumeClaim, error) {
-	ctx := context.TODO()
 	// old labels and PVC ID for backward compatibility
 	pvcID := legacyDeviceSetPVCID(deviceSetName, setIndex)
 
@@ -210,12 +220,12 @@ func (c *Cluster) createDeviceSetPVC(existingPVCs map[string]*v1.PersistentVolum
 		logger.Infof("OSD PVC %q already exists", existingPVC.Name)
 
 		// Update the PVC in case the size changed
-		k8sutil.ExpandPVCIfRequired(c.context.Client, pvc, existingPVC)
+		k8sutil.ExpandPVCIfRequired(c.clusterInfo.Context, c.context.Client, pvc, existingPVC)
 		return existingPVC, nil
 	}
 
 	// No PVC found, creating a new one
-	deployedPVC, err := c.context.Clientset.CoreV1().PersistentVolumeClaims(c.clusterInfo.Namespace).Create(ctx, pvc, metav1.CreateOptions{})
+	deployedPVC, err := c.context.Clientset.CoreV1().PersistentVolumeClaims(c.clusterInfo.Namespace).Create(c.clusterInfo.Context, pvc, metav1.CreateOptions{})
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to create PVC %q for device set %q", pvc.Name, deviceSetName)
 	}
@@ -247,8 +257,7 @@ func makeDeviceSetPVC(deviceSetName, pvcID string, setIndex int, pvcTemplate v1.
 }
 
 // GetExistingPVCs fetches the list of OSD PVCs
-func GetExistingPVCs(clusterdContext *clusterd.Context, namespace string) (map[string]*v1.PersistentVolumeClaim, map[string]sets.String, error) {
-	ctx := context.TODO()
+func GetExistingPVCs(ctx context.Context, clusterdContext *clusterd.Context, namespace string) (map[string]*v1.PersistentVolumeClaim, map[string]sets.String, error) {
 	selector := metav1.ListOptions{LabelSelector: CephDeviceSetPVCIDLabelKey}
 	pvcs, err := clusterdContext.Clientset.CoreV1().PersistentVolumeClaims(namespace).List(ctx, selector)
 	if err != nil {

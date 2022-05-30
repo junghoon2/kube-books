@@ -25,9 +25,7 @@ OSD_COUNT=$2
 #############
 # FUNCTIONS #
 #############
-EXEC_COMMAND="kubectl -n rook-ceph exec $(kubectl get pod -l app=rook-ceph-tools -n rook-ceph -o jsonpath='{.items[0].metadata.name}') -- ceph --connect-timeout 3"
-
-trap display_status SIGINT ERR
+EXEC_COMMAND="kubectl -n rook-ceph exec $(kubectl get pod -l app=rook-ceph-tools -n rook-ceph -o jsonpath='{.items[*].metadata.name}') -- ceph --connect-timeout 3"
 
 function wait_for_daemon () {
   timeout=90
@@ -39,6 +37,8 @@ function wait_for_daemon () {
     sleep 1
     let timeout=timeout-1
   done
+  echo "current status:"
+  $EXEC_COMMAND -s
 
   return 1
 }
@@ -88,31 +88,39 @@ function test_demo_pool {
 }
 
 function test_csi {
-  timeout 180 bash <<-'EOF'
-    until [[ "$(kubectl -n rook-ceph get pods --field-selector=status.phase=Running|grep -c ^csi-)" -eq 4 ]]; do
-      echo "waiting for csi pods to be ready"
+  timeout 360 bash -x <<-'EOF'
+    echo $IS_MULTUS
+    if [ -z $IS_MULTUS ]; then
+      until [[ "$(kubectl -n rook-ceph get pods --field-selector=status.phase=Running|grep -c ^csi-)" -eq 4 ]]; do
+        echo "waiting for csi pods to be ready"
+        sleep 5
+      done
+    else
+      until [[ "$(kubectl -n rook-ceph get pods --field-selector=status.phase=Running|grep -c ^csi-)" -eq 6 ]]; do
+        echo "waiting for csi pods to be ready with multus"
+        sleep 5
+      done
+      echo "verifying csi holder interfaces (multus ones must be present)"
+      kubectl -n rook-ceph exec -t ds/csi-rbdplugin-holder-my-cluster -- grep net /proc/net/dev
+      kubectl -n rook-ceph exec -t ds/csi-cephfsplugin-holder-my-cluster -- grep net /proc/net/dev
+    fi
+EOF
+}
+
+function test_nfs {
+  timeout 360 bash <<-'EOF'
+    until [[ "$(kubectl -n rook-ceph get pods --field-selector=status.phase=Running|grep -c ^rook-ceph-nfs-)" -eq 1 ]]; do
+      echo "waiting for nfs pods to be ready"
       sleep 5
     done
 EOF
 }
 
-function display_status {
-  $EXEC_COMMAND -s > test/ceph-status.txt
-  $EXEC_COMMAND osd dump > test/ceph-osd-dump.txt
-  $EXEC_COMMAND report > test/ceph-report.txt
-
-  kubectl -n rook-ceph logs deploy/rook-ceph-operator > test/operator-logs.txt
-  kubectl -n rook-ceph get pods -o wide > test/pods-list.txt
-  kubectl -n rook-ceph describe job/"$(kubectl -n rook-ceph get job -l app=rook-ceph-osd-prepare -o jsonpath='{.items[*].metadata.name}')" > test/osd-prepare-describe.txt
-  kubectl -n rook-ceph log job/"$(kubectl -n rook-ceph get job -l app=rook-ceph-osd-prepare -o jsonpath='{.items[*].metadata.name}')" > test/osd-prepare-logs.txt
-  kubectl -n rook-ceph describe deploy/rook-ceph-osd-0 > test/rook-ceph-osd-0-describe.txt
-  kubectl -n rook-ceph describe deploy/rook-ceph-osd-1 > test/rook-ceph-osd-1-describe.txt
-  kubectl -n rook-ceph logs deploy/rook-ceph-osd-0 --all-containers > test/rook-ceph-osd-0-logs.txt
-  kubectl -n rook-ceph logs deploy/rook-ceph-osd-1 --all-containers > test/rook-ceph-osd-1-logs.txt
-  kubectl get all -n rook-ceph -o wide > test/cluster-wide.txt
-  kubectl get all -n rook-ceph -o yaml > test/cluster-yaml.txt
-  kubectl -n rook-ceph get cephcluster -o yaml > test/cephcluster.txt
-  sudo lsblk | sudo tee -a test/lsblk.txt
+function test_multus_osd {
+  for i in $(seq 1 2); do
+    kubectl -n rook-ceph exec -t deploy/rook-ceph-osd-0 -c osd -- grep net"$i" /proc/net/dev
+    kubectl -n rook-ceph exec -t deploy/rook-ceph-osd-0 -c osd -- grep net"$i" /proc/net/dev
+  done
 }
 
 ########
@@ -123,7 +131,7 @@ test_demo_mon
 test_demo_mgr
 
 if [[ "$DAEMON_TO_VALIDATE" == "all" ]]; then
-  daemons_list="osd mds rgw rbd_mirror fs_mirror"
+  daemons_list="osd mds rgw rbd_mirror fs_mirror nfs"
 else
   # change commas to space
   comma_to_space=${DAEMON_TO_VALIDATE//,/ }
@@ -146,6 +154,10 @@ for daemon in $daemons_list; do
     osd)
       test_demo_osd
       ;;
+    osd_multus)
+      test_demo_osd
+      test_multus_osd
+      ;;
     mds)
       test_demo_mds
       ;;
@@ -157,6 +169,9 @@ for daemon in $daemons_list; do
       ;;
     fs_mirror)
       test_demo_fs_mirror
+      ;;
+    nfs)
+      test_nfs
       ;;
     *)
       log "ERROR: unknown daemon to validate!"
@@ -171,7 +186,3 @@ $EXEC_COMMAND -s
 kubectl -n rook-ceph get pods
 kubectl -n rook-ceph logs "$(kubectl -n rook-ceph -l app=rook-ceph-operator get pods -o jsonpath='{.items[*].metadata.name}')"
 kubectl -n rook-ceph get cephcluster -o yaml
-
-set +eE
-display_status
-set -eE

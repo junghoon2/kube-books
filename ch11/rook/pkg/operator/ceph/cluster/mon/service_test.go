@@ -18,11 +18,11 @@ package mon
 
 import (
 	"context"
-	"sync"
 	"testing"
 
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	"github.com/rook/rook/pkg/clusterd"
+	"github.com/rook/rook/pkg/daemon/ceph/client"
 	"github.com/rook/rook/pkg/operator/k8sutil"
 	"github.com/rook/rook/pkg/operator/test"
 	"github.com/stretchr/testify/assert"
@@ -32,7 +32,8 @@ import (
 func TestCreateService(t *testing.T) {
 	ctx := context.TODO()
 	clientset := test.New(t, 1)
-	c := New(&clusterd.Context{Clientset: clientset}, "ns", cephv1.ClusterSpec{}, &k8sutil.OwnerInfo{}, &sync.Mutex{})
+	c := New(ctx, &clusterd.Context{Clientset: clientset}, "ns", cephv1.ClusterSpec{}, &k8sutil.OwnerInfo{})
+	c.ClusterInfo = client.AdminTestClusterInfo("rook-ceph")
 	m := &monConfig{ResourceName: "rook-ceph-mon-b", DaemonName: "b"}
 	clusterIP, err := c.createService(m)
 	assert.NoError(t, err)

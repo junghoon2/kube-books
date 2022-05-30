@@ -43,7 +43,7 @@ const (
 func (c *Cluster) getLabels(monConfig *monConfig, canary, includeNewLabels bool) map[string]string {
 	// Mons have a service for each mon, so the additional pod data is relevant for its services
 	// Use pod labels to keep "mon: id" for legacy
-	labels := controller.CephDaemonAppLabels(AppName, c.Namespace, "mon", monConfig.DaemonName, includeNewLabels)
+	labels := controller.CephDaemonAppLabels(AppName, c.Namespace, config.MonType, monConfig.DaemonName, c.ClusterInfo.NamespacedName().Name, "cephclusters.ceph.rook.io", includeNewLabels)
 	// Add "mon_cluster: <namespace>" for legacy
 	labels[monClusterAttr] = c.Namespace
 	if canary {
@@ -303,8 +303,8 @@ func (c *Cluster) makeMonDaemonContainer(monConfig *monConfig) corev1.Container 
 		SecurityContext: controller.PodSecurityContext(),
 		Ports: []corev1.ContainerPort{
 			{
-				Name:          "tcp-msgr1",
-				ContainerPort: monConfig.Port,
+				Name:          "tcp-msgr2",
+				ContainerPort: DefaultMsgr2Port,
 				Protocol:      corev1.ProtocolTCP,
 			},
 		},
@@ -313,8 +313,18 @@ func (c *Cluster) makeMonDaemonContainer(monConfig *monConfig) corev1.Container 
 			k8sutil.PodIPEnvVar(podIPEnvVar),
 		),
 		Resources:     cephv1.GetMonResources(c.spec.Resources),
+		StartupProbe:  controller.GenerateStartupProbeExecDaemon(config.MonType, monConfig.DaemonName),
 		LivenessProbe: controller.GenerateLivenessProbeExecDaemon(config.MonType, monConfig.DaemonName),
 		WorkingDir:    config.VarLogCephDir,
+	}
+
+	if !c.spec.RequireMsgr2() {
+		// Add messenger 1 port
+		container.Ports = append(container.Ports, v1.ContainerPort{
+			Name:          "tcp-msgr1",
+			ContainerPort: DefaultMsgr1Port,
+			Protocol:      v1.ProtocolTCP,
+		})
 	}
 
 	if monConfig.Zone != "" {
@@ -326,8 +336,8 @@ func (c *Cluster) makeMonDaemonContainer(monConfig *monConfig) corev1.Container 
 		}
 	}
 
-	// If the liveness probe is enabled
-	container = config.ConfigureLivenessProbe(cephv1.KeyMon, container, c.spec.HealthCheck)
+	container = config.ConfigureStartupProbe(container, c.spec.HealthCheck.StartupProbe[cephv1.KeyMon])
+	container = config.ConfigureLivenessProbe(container, c.spec.HealthCheck.LivenessProbe[cephv1.KeyMon])
 
 	// If host networking is enabled, we don't need a bind addr that is different from the public addr
 	if !c.spec.Network.IsHost() {
@@ -336,9 +346,6 @@ func (c *Cluster) makeMonDaemonContainer(monConfig *monConfig) corev1.Container 
 		container.Args = append(container.Args,
 			config.NewFlag("public-bind-addr", controller.ContainerEnvVarReference(podIPEnvVar)))
 	}
-
-	// Add messenger 2 port
-	addContainerPort(container, "tcp-msgr2", 3300)
 
 	return container
 }
@@ -380,6 +387,6 @@ func UpdateCephDeploymentAndWait(context *clusterd.Context, clusterInfo *client.
 		return nil
 	}
 
-	err := k8sutil.UpdateDeploymentAndWait(context, deployment, clusterInfo.Namespace, callback)
+	err := k8sutil.UpdateDeploymentAndWait(clusterInfo.Context, context, deployment, clusterInfo.Namespace, callback)
 	return err
 }

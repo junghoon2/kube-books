@@ -34,7 +34,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/apimachinery/pkg/types"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 )
 
 const (
@@ -67,7 +68,10 @@ const (
 		"max_objects": -1
 	}
 }`
+	//#nosec G101 -- The credentials are just for the unit tests
 	access_key = "VFKF8SSU9L3L2UR03Z8C"
+	//#nosec G101 -- The credentials are just for the unit tests
+	secret_key = "5U4e2MkXHgXstfWkxGZOI6AXDfVUkDDHM7Dwc3mY"
 )
 
 func TestReconcileRealm(t *testing.T) {
@@ -187,7 +191,7 @@ func deleteStore(t *testing.T, name string, existingStores string, expectedDelet
 	executor.MockExecuteCommandWithTimeout = executorFuncWithTimeout
 	executor.MockExecuteCommandWithOutput = executorFunc
 	executor.MockExecuteCommandWithCombinedOutput = executorFunc
-	context := &Context{Context: &clusterd.Context{Executor: executor}, Name: "myobj", clusterInfo: &client.ClusterInfo{Namespace: "ns"}}
+	context := &Context{Context: &clusterd.Context{Executor: executor}, Name: "myobj", clusterInfo: client.AdminTestClusterInfo("mycluster")}
 
 	// Delete an object store without deleting the pools
 	spec := cephv1.ObjectStoreSpec{}
@@ -218,35 +222,117 @@ func deleteStore(t *testing.T, name string, existingStores string, expectedDelet
 }
 
 func TestGetObjectBucketProvisioner(t *testing.T) {
-	ctx := context.TODO()
-	k8s := fake.NewSimpleClientset()
-	operatorSettingConfigMapName := "rook-ceph-operator-config"
 	testNamespace := "test-namespace"
-	watchOperatorNamespace := map[string]string{"ROOK_OBC_WATCH_OPERATOR_NAMESPACE": "true"}
-	ignoreOperatorNamespace := map[string]string{"ROOK_OBC_WATCH_OPERATOR_NAMESPACE": "false"}
-	context := &clusterd.Context{Clientset: k8s}
 	os.Setenv(k8sutil.PodNamespaceEnvVar, testNamespace)
 
-	cm := &v1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      operatorSettingConfigMapName,
-			Namespace: testNamespace,
+	t.Run("watch single namespace", func(t *testing.T) {
+		data := map[string]string{"ROOK_OBC_WATCH_OPERATOR_NAMESPACE": "true"}
+		bktprovisioner := GetObjectBucketProvisioner(data, testNamespace)
+		assert.Equal(t, fmt.Sprintf("%s.%s", testNamespace, bucketProvisionerName), bktprovisioner)
+	})
+
+	t.Run("watch all namespaces", func(t *testing.T) {
+		data := map[string]string{"ROOK_OBC_WATCH_OPERATOR_NAMESPACE": "false"}
+		bktprovisioner := GetObjectBucketProvisioner(data, testNamespace)
+		assert.Equal(t, bucketProvisionerName, bktprovisioner)
+	})
+}
+
+func TestCheckDashboardUser(t *testing.T) {
+	storeName := "myobject"
+	executor := &exectest.MockExecutor{
+		MockExecuteCommandWithOutput: func(command string, args ...string) (string, error) {
+			return "", nil
 		},
-		Data: watchOperatorNamespace,
+		MockExecuteCommandWithTimeout: func(timeout time.Duration, command string, args ...string) (string, error) {
+			if args[0] == "user" {
+				if args[1] == "info" {
+					return "no user info saved", nil
+				}
+			}
+			return "", nil
+		},
+	}
+	objContext := NewContext(&clusterd.Context{Executor: executor}, &client.ClusterInfo{
+		Namespace:   "mycluster",
+		CephVersion: cephver.CephVersion{Major: 15, Minor: 2, Extra: 9},
+		Context:     context.TODO(),
+	},
+		storeName)
+
+	// Scenario 1: No user exists yet
+	user, err := getDashboardUser(objContext)
+	assert.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.Nil(t, user.AccessKey)
+	assert.Nil(t, user.SecretKey)
+	checkdashboard, err := checkDashboardUser(objContext, user)
+	assert.NoError(t, err)
+	assert.False(t, checkdashboard)
+
+	// Scenario 2: User exists and the current dashboard credentials are the same
+	objContext.Context.Executor = &exectest.MockExecutor{
+		MockExecuteCommandWithOutput: func(command string, args ...string) (string, error) {
+			if args[0] == "dashboard" {
+				if args[1] == "get-rgw-api-access-key" {
+					return access_key, nil
+				} else if args[1] == "get-rgw-api-secret-key" {
+					return secret_key, nil
+				}
+			}
+			return "", nil
+		},
+		MockExecuteCommandWithTimeout: func(timeout time.Duration, command string, args ...string) (string, error) {
+			if args[0] == "user" {
+				if args[1] == "info" {
+					return dashboardAdminCreateJSON, nil
+				}
+			}
+			return "", nil
+		},
 	}
 
-	_, err := k8s.CoreV1().ConfigMaps(testNamespace).Create(ctx, cm, metav1.CreateOptions{})
+	user, err = getDashboardUser(objContext)
 	assert.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.NotNil(t, user.AccessKey)
+	assert.NotNil(t, user.SecretKey)
 
-	bktprovisioner := GetObjectBucketProvisioner(context, testNamespace)
-	assert.Equal(t, fmt.Sprintf("%s.%s", testNamespace, bucketProvisionerName), bktprovisioner)
-
-	cm.Data = ignoreOperatorNamespace
-	_, err = k8s.CoreV1().ConfigMaps(testNamespace).Update(ctx, cm, metav1.UpdateOptions{})
+	checkdashboard, err = checkDashboardUser(objContext, user)
 	assert.NoError(t, err)
+	assert.True(t, checkdashboard)
 
-	bktprovisioner = GetObjectBucketProvisioner(context, testNamespace)
-	assert.Equal(t, bucketProvisionerName, bktprovisioner)
+	// Scenario 3: User exists but dashboard credentials differ from radosgw-admin user info credentials
+	objContext.Context.Executor = &exectest.MockExecutor{
+		MockExecuteCommandWithOutput: func(command string, args ...string) (string, error) {
+			if args[0] == "dashboard" {
+				if args[1] == "get-rgw-api-access-key" {
+					return "incorrect", nil
+				} else if args[1] == "get-rgw-api-secret-key" {
+					return "incorrect", nil
+				}
+			}
+			return "", nil
+		},
+		MockExecuteCommandWithTimeout: func(timeout time.Duration, command string, args ...string) (string, error) {
+			if args[0] == "user" {
+				if args[1] == "info" {
+					return dashboardAdminCreateJSON, nil
+				}
+			}
+			return "", nil
+		},
+	}
+
+	user, err = getDashboardUser(objContext)
+	assert.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.NotNil(t, user.AccessKey)
+	assert.NotNil(t, user.SecretKey)
+
+	checkdashboard, err = checkDashboardUser(objContext, user)
+	assert.NoError(t, err)
+	assert.False(t, checkdashboard)
 }
 
 func TestDashboard(t *testing.T) {
@@ -257,50 +343,61 @@ func TestDashboard(t *testing.T) {
 		},
 		MockExecuteCommandWithTimeout: func(timeout time.Duration, command string, args ...string) (string, error) {
 			if args[0] == "user" {
+				if args[1] == "info" {
+					return "no user info saved", nil
+				} else if args[1] == "create" {
+					return dashboardAdminCreateJSON, nil
+				}
+			}
+			return "", nil
+		},
+	}
+	objContext := NewContext(&clusterd.Context{Executor: executor}, &client.ClusterInfo{
+		Namespace:   "mycluster",
+		CephVersion: cephver.CephVersion{Major: 15, Minor: 2, Extra: 9},
+		Context:     context.TODO(),
+	},
+		storeName)
+
+	user, err := getDashboardUser(objContext)
+	assert.NoError(t, err)
+	assert.NotNil(t, user)
+	checkdashboard, err := checkDashboardUser(objContext, user)
+	assert.NoError(t, err)
+	assert.False(t, checkdashboard)
+	err = enableRGWDashboard(objContext)
+	assert.NoError(t, err)
+
+	executor = &exectest.MockExecutor{
+		MockExecuteCommandWithOutput: func(command string, args ...string) (string, error) {
+			return "", nil
+		},
+		MockExecuteCommandWithTimeout: func(timeout time.Duration, command string, args ...string) (string, error) {
+			if args[0] == "user" && args[1] == "info" {
 				return dashboardAdminCreateJSON, nil
 			}
 			return "", nil
 		},
 	}
-	context := &clusterd.Context{Executor: executor}
-	objContext := NewContext(context, &client.ClusterInfo{Namespace: "mycluster",
-		CephVersion: cephver.CephVersion{Major: 15, Minor: 2, Extra: 9}},
-		storeName)
-	checkdashboard, err := checkDashboardUser(objContext)
-	assert.NoError(t, err)
-	assert.False(t, checkdashboard)
-	err = enableRGWDashboard(objContext)
-	assert.Nil(t, err)
-	executor = &exectest.MockExecutor{
-		MockExecuteCommandWithOutput: func(command string, args ...string) (string, error) {
-			if args[0] == "dashboard" && args[1] == "get-rgw-api-access-key" {
-				return access_key, nil
-			}
-			return "", nil
-		},
-	}
 	objContext.Context.Executor = executor
-	checkdashboard, err = checkDashboardUser(objContext)
+
+	user, err = getDashboardUser(objContext)
+	assert.NoError(t, err)
+	assert.NotNil(t, user)
+	checkdashboard, err = checkDashboardUser(objContext, user)
 	assert.NoError(t, err)
 	assert.True(t, checkdashboard)
 	disableRGWDashboard(objContext)
 
-	context = &clusterd.Context{Executor: executor}
-	objContext = NewContext(context, &client.ClusterInfo{Namespace: "mycluster",
-		CephVersion: cephver.CephVersion{Major: 15, Minor: 2, Extra: 10}},
+	objContext = NewContext(&clusterd.Context{Executor: executor}, &client.ClusterInfo{
+		Namespace:   "mycluster",
+		CephVersion: cephver.CephVersion{Major: 15, Minor: 2, Extra: 10},
+		Context:     context.TODO(),
+	},
 		storeName)
 	err = enableRGWDashboard(objContext)
-	assert.Nil(t, err)
-	executor = &exectest.MockExecutor{
-		MockExecuteCommandWithOutput: func(command string, args ...string) (string, error) {
-			if args[0] == "dashboard" && args[1] == "get-rgw-api-access-key" {
-				return access_key, nil
-			}
-			return "", nil
-		},
-	}
-	objContext.Context.Executor = executor
-	checkdashboard, err = checkDashboardUser(objContext)
+	assert.NoError(t, err)
+	checkdashboard, err = checkDashboardUser(objContext, user)
 	assert.NoError(t, err)
 	assert.True(t, checkdashboard)
 	disableRGWDashboard(objContext)
@@ -562,4 +659,159 @@ func Test_createMultisite(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetRealmKeySecret(t *testing.T) {
+	ns := "my-ns"
+	realmName := "my-realm"
+	ctx := context.TODO()
+
+	t.Run("secret exists", func(t *testing.T) {
+		secret := &v1.Secret{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "Secret",
+				APIVersion: v1.SchemeGroupVersion.String(),
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: ns,
+				Name:      realmName + "-keys",
+			},
+			// should not care about data presence just to get the secret
+		}
+
+		c := &clusterd.Context{
+			Clientset: k8sfake.NewSimpleClientset(secret),
+		}
+
+		secret, err := GetRealmKeySecret(ctx, c, types.NamespacedName{Namespace: ns, Name: realmName})
+		assert.NoError(t, err)
+		assert.NotNil(t, secret)
+	})
+
+	t.Run("secret doesn't exist", func(t *testing.T) {
+		c := &clusterd.Context{
+			Clientset: k8sfake.NewSimpleClientset(),
+		}
+
+		secret, err := GetRealmKeySecret(ctx, c, types.NamespacedName{Namespace: ns, Name: realmName})
+		assert.Error(t, err)
+		assert.Nil(t, secret)
+	})
+}
+
+func TestGetRealmKeyArgsFromSecret(t *testing.T) {
+	ns := "my-ns"
+	realmName := "my-realm"
+	realmNsName := types.NamespacedName{Namespace: ns, Name: realmName}
+
+	baseSecret := &v1.Secret{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Secret",
+			APIVersion: v1.SchemeGroupVersion.String(),
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns,
+			Name:      realmName + "-keys",
+		},
+		Data: map[string][]byte{},
+	}
+
+	t.Run("all secret data exists", func(t *testing.T) {
+		s := baseSecret.DeepCopy()
+		s.Data["access-key"] = []byte("my-access-key")
+		s.Data["secret-key"] = []byte("my-secret-key")
+
+		access, secret, err := GetRealmKeyArgsFromSecret(s, realmNsName)
+		assert.NoError(t, err)
+		assert.Equal(t, "--access-key=my-access-key", access)
+		assert.Equal(t, "--secret-key=my-secret-key", secret)
+	})
+
+	t.Run("access-key missing", func(t *testing.T) {
+		s := baseSecret.DeepCopy()
+		// missing s.Data["access-key"]
+		s.Data["secret-key"] = []byte("my-secret-key")
+
+		access, secret, err := GetRealmKeyArgsFromSecret(s, realmNsName)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to decode CephObjectRealm \"my-ns/my-realm\" access key from secret")
+		assert.Equal(t, "", access)
+		assert.Equal(t, "", secret)
+	})
+
+	t.Run("secret-key missing", func(t *testing.T) {
+		s := baseSecret.DeepCopy()
+		s.Data["access-key"] = []byte("my-access-key")
+		// missing s.Data["secret-key"]
+
+		access, secret, err := GetRealmKeyArgsFromSecret(s, realmNsName)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to decode CephObjectRealm \"my-ns/my-realm\" secret key from secret")
+		assert.Equal(t, "", access)
+		assert.Equal(t, "", secret)
+	})
+}
+
+func TestGetRealmKeyArgs(t *testing.T) {
+	ns := "my-ns"
+	realmName := "my-realm"
+	ctx := context.TODO()
+
+	baseSecret := &v1.Secret{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Secret",
+			APIVersion: v1.SchemeGroupVersion.String(),
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns,
+			Name:      realmName + "-keys",
+		},
+		Data: map[string][]byte{},
+	}
+
+	// No need to test every case since this is a combination of GetRealmKeySecret and
+	// GetRealmKeyArgsFromSecret and those are both thoroughly unit tested. Just check the success
+	// case and cases where either sub-function fails.
+
+	t.Run("secret exists with all data", func(t *testing.T) {
+		s := baseSecret.DeepCopy()
+		s.Data["access-key"] = []byte("my-access-key")
+		s.Data["secret-key"] = []byte("my-secret-key")
+
+		c := &clusterd.Context{
+			Clientset: k8sfake.NewSimpleClientset(s),
+		}
+
+		access, secret, err := GetRealmKeyArgs(ctx, c, realmName, ns)
+		assert.NoError(t, err)
+		assert.Equal(t, "--access-key=my-access-key", access)
+		assert.Equal(t, "--secret-key=my-secret-key", secret)
+	})
+
+	t.Run("secret doesn't exist", func(t *testing.T) {
+		c := &clusterd.Context{
+			Clientset: k8sfake.NewSimpleClientset(),
+		}
+
+		access, secret, err := GetRealmKeyArgs(ctx, c, realmName, ns)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to get CephObjectRealm \"my-ns/my-realm\" keys secret")
+		assert.Equal(t, "", access)
+		assert.Equal(t, "", secret)
+	})
+
+	t.Run("secret exists but is missing data", func(t *testing.T) {
+		s := baseSecret.DeepCopy()
+		// missing all data
+
+		c := &clusterd.Context{
+			Clientset: k8sfake.NewSimpleClientset(s),
+		}
+
+		access, secret, err := GetRealmKeyArgs(ctx, c, realmName, ns)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to decode CephObjectRealm \"my-ns/my-realm\"")
+		assert.Equal(t, "", access)
+		assert.Equal(t, "", secret)
+	})
 }

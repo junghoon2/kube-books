@@ -32,9 +32,14 @@ if [[ -n "$BUILD_CRDS_INTO_DIR" ]]; then
   echo "Generating CRDs into dir $BUILD_CRDS_INTO_DIR"
   DESTINATION_ROOT="$BUILD_CRDS_INTO_DIR"
 fi
-OLM_CATALOG_DIR="${DESTINATION_ROOT}/cluster/olm/ceph/deploy/crds"
-CEPH_CRDS_FILE_PATH="${DESTINATION_ROOT}/cluster/examples/kubernetes/ceph/crds.yaml"
-CEPH_HELM_CRDS_FILE_PATH="${DESTINATION_ROOT}/cluster/charts/rook-ceph/templates/resources.yaml"
+OLM_CATALOG_DIR="${DESTINATION_ROOT}/deploy/olm/deploy/crds"
+CEPH_CRDS_FILE_PATH="${DESTINATION_ROOT}/deploy/examples/crds.yaml"
+CEPH_HELM_CRDS_FILE_PATH="${DESTINATION_ROOT}/deploy/charts/rook-ceph/templates/resources.yaml"
+
+if [[ "$($YQ_BIN_PATH --version)" != "yq (https://github.com/mikefarah/yq/) version 4."* ]]; then
+  echo "yq must be version 4.x"
+  exit 1
+fi
 
 #############
 # FUNCTIONS #
@@ -42,24 +47,30 @@ CEPH_HELM_CRDS_FILE_PATH="${DESTINATION_ROOT}/cluster/charts/rook-ceph/templates
 
 copy_ob_obc_crds() {
   mkdir -p "$OLM_CATALOG_DIR"
-  cp -f "${SCRIPT_ROOT}/cluster/olm/ceph/assemble/objectbucket.io_objectbucketclaims.yaml" "$OLM_CATALOG_DIR"
-  cp -f "${SCRIPT_ROOT}/cluster/olm/ceph/assemble/objectbucket.io_objectbuckets.yaml" "$OLM_CATALOG_DIR"
+  cp -f "${SCRIPT_ROOT}/deploy/olm/assemble/objectbucket.io_objectbucketclaims.yaml" "$OLM_CATALOG_DIR"
+  cp -f "${SCRIPT_ROOT}/deploy/olm/assemble/objectbucket.io_objectbuckets.yaml" "$OLM_CATALOG_DIR"
+}
+
+copy_volume_replication_crds() {
+  volume_replication_dir=${SCRIPT_ROOT}/.cache/crds/volumereplication
+  volume_replication_crd=replication.storage.openshift.io_volumereplications.yaml
+  volume_replication_class_crd=replication.storage.openshift.io_volumereplicationclasses.yaml
+  if [[ ! -d "${volume_replication_dir}" ]]; then
+    mkdir -p "${volume_replication_dir}"
+    VOLUME_REPLICATION_URL=${VOLUME_REPLICATION_URL:-https://raw.githubusercontent.com/csi-addons/volume-replication-operator/v0.3.0/config/crd/bases}
+    curl -L ${VOLUME_REPLICATION_URL}/${volume_replication_crd} -o ${volume_replication_dir}/${volume_replication_crd}
+    curl -L ${VOLUME_REPLICATION_URL}/${volume_replication_class_crd} -o ${volume_replication_dir}/${volume_replication_class_crd}
+  fi
+
+  cp -f "${volume_replication_dir}/${volume_replication_crd}" "$OLM_CATALOG_DIR"
+  cp -f "${volume_replication_dir}/${volume_replication_class_crd}" "$OLM_CATALOG_DIR"
 }
 
 generating_crds_v1() {
   echo "Generating ceph crds"
   "$CONTROLLER_GEN_BIN_PATH" "$CRD_OPTIONS" paths="./pkg/apis/ceph.rook.io/v1" output:crd:artifacts:config="$OLM_CATALOG_DIR"
   # the csv upgrade is failing on the volumeClaimTemplate.metadata.annotations.crushDeviceClass unless we preserve the annotations as an unknown field
-  $YQ_BIN_PATH w -i "${OLM_CATALOG_DIR}"/ceph.rook.io_cephclusters.yaml spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.storage.properties.storageClassDeviceSets.items.properties.volumeClaimTemplates.items.properties.metadata.properties.annotations.x-kubernetes-preserve-unknown-fields true
-}
-
-generating_crds_v1alpha2() {
-  "$CONTROLLER_GEN_BIN_PATH" "$CRD_OPTIONS" paths="./pkg/apis/rook.io/v1alpha2" output:crd:artifacts:config="$OLM_CATALOG_DIR"
-  # TODO: revisit later
-  # * remove copy_ob_obc_crds()
-  # * remove files cluster/olm/ceph/assemble/{objectbucket.io_objectbucketclaims.yaml,objectbucket.io_objectbuckets.yaml}
-  # Activate code below
-  # "$CONTROLLER_GEN_BIN_PATH" "$CRD_OPTIONS" paths="./vendor/github.com/kube-object-storage/lib-bucket-provisioner/pkg/apis/objectbucket.io/v1alpha1" output:crd:artifacts:config="$OLM_CATALOG_DIR"
+  $YQ_BIN_PATH eval --inplace '.spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.storage.properties.storageClassDeviceSets.items.properties.volumeClaimTemplates.items.properties.metadata.properties.annotations.x-kubernetes-preserve-unknown-fields = true' "${OLM_CATALOG_DIR}"/ceph.rook.io_cephclusters.yaml
 }
 
 generating_main_crd() {
@@ -78,19 +89,13 @@ build_helm_resources() {
   {
     # add header
     echo "{{- if .Values.crds.enabled }}"
-    echo "{{- if semverCompare \">=1.16.0-0\" .Capabilities.KubeVersion.GitVersion }}"
 
-    # Add helm annotations to all CRDS and skip the first 4 lines of crds.yaml
-    "$YQ_BIN_PATH" w -d'*' "$CEPH_CRDS_FILE_PATH" "metadata.annotations[helm.sh/resource-policy]" keep | tail -n +5
+    # Add helm annotations to all CRDS, remove empty lines in the output
+    # skip the comment lines of crds.yaml as well as the yaml doc header
+    "$YQ_BIN_PATH" eval-all '.metadata.annotations["helm.sh/resource-policy"] = "keep"' "$CEPH_CRDS_FILE_PATH" | tail -n +6
 
-    # add else
-    echo "{{- else }}"
-
-    # add footer
-    cat "${SCRIPT_ROOT}/cluster/examples/kubernetes/ceph/pre-k8s-1.16/crds.yaml"
     # DO NOT REMOVE the empty line, it is necessary
     echo ""
-    echo "{{- end }}"
     echo "{{- end }}"
   } >>"$CEPH_HELM_CRDS_FILE_PATH"
 }
@@ -98,21 +103,30 @@ build_helm_resources() {
 ########
 # MAIN #
 ########
+# clean the directory where CRDs are generated
+rm -fr "$OLM_CATALOG_DIR"
+
+# generate the CRDs
 generating_crds_v1
 
+# get the OBC CRDs
 if [ -z "$NO_OB_OBC_VOL_GEN" ]; then
-  echo "Generating v1alpha2 in crds.yaml"
+  echo "Generating obcs in crds.yaml"
   copy_ob_obc_crds
-  generating_crds_v1alpha2
 fi
 
 generating_main_crd
 
-for crd in "$OLM_CATALOG_DIR/"*.yaml; do
-  echo "---" >> "$CEPH_CRDS_FILE_PATH" # yq doesn't output doc separators
-  # Process each intermediate CRD file with yq to enforce consistent formatting in the final product
-  # regardless of whether yq was used in previous steps to alter CRD intermediate files.
-  $YQ_BIN_PATH read "$crd" >> "$CEPH_CRDS_FILE_PATH"
-done
+CRD_FILES=()
+while read -r line; do
+  CRD_FILES+=("$line")
+done < <(find "$OLM_CATALOG_DIR" -type f -name '*.yaml' | sort)
+
+echo "---" >> "$CEPH_CRDS_FILE_PATH" # yq doesn't output the first doc separator
+$YQ_BIN_PATH eval-all '.' "${CRD_FILES[@]}" >> "$CEPH_CRDS_FILE_PATH"
 
 build_helm_resources
+
+# copy the volume replication crds last so they won't be included in the helm chart or crds.yaml,
+# we just want them to end up owned by the csv
+copy_volume_replication_crds

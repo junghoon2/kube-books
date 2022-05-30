@@ -26,6 +26,12 @@ import (
 type Interface interface {
 	// CephBlockPools returns a CephBlockPoolInformer.
 	CephBlockPools() CephBlockPoolInformer
+	// CephBlockPoolRadosNamespaces returns a CephBlockPoolRadosNamespaceInformer.
+	CephBlockPoolRadosNamespaces() CephBlockPoolRadosNamespaceInformer
+	// CephBucketNotifications returns a CephBucketNotificationInformer.
+	CephBucketNotifications() CephBucketNotificationInformer
+	// CephBucketTopics returns a CephBucketTopicInformer.
+	CephBucketTopics() CephBucketTopicInformer
 	// CephClients returns a CephClientInformer.
 	CephClients() CephClientInformer
 	// CephClusters returns a CephClusterInformer.
@@ -34,6 +40,8 @@ type Interface interface {
 	CephFilesystems() CephFilesystemInformer
 	// CephFilesystemMirrors returns a CephFilesystemMirrorInformer.
 	CephFilesystemMirrors() CephFilesystemMirrorInformer
+	// CephFilesystemSubVolumeGroups returns a CephFilesystemSubVolumeGroupInformer.
+	CephFilesystemSubVolumeGroups() CephFilesystemSubVolumeGroupInformer
 	// CephNFSes returns a CephNFSInformer.
 	CephNFSes() CephNFSInformer
 	// CephObjectRealms returns a CephObjectRealmInformer.
@@ -66,6 +74,21 @@ func (v *version) CephBlockPools() CephBlockPoolInformer {
 	return &cephBlockPoolInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
+// CephBlockPoolRadosNamespaces returns a CephBlockPoolRadosNamespaceInformer.
+func (v *version) CephBlockPoolRadosNamespaces() CephBlockPoolRadosNamespaceInformer {
+	return &cephBlockPoolRadosNamespaceInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// CephBucketNotifications returns a CephBucketNotificationInformer.
+func (v *version) CephBucketNotifications() CephBucketNotificationInformer {
+	return &cephBucketNotificationInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// CephBucketTopics returns a CephBucketTopicInformer.
+func (v *version) CephBucketTopics() CephBucketTopicInformer {
+	return &cephBucketTopicInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
 // CephClients returns a CephClientInformer.
 func (v *version) CephClients() CephClientInformer {
 	return &cephClientInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
@@ -84,6 +107,11 @@ func (v *version) CephFilesystems() CephFilesystemInformer {
 // CephFilesystemMirrors returns a CephFilesystemMirrorInformer.
 func (v *version) CephFilesystemMirrors() CephFilesystemMirrorInformer {
 	return &cephFilesystemMirrorInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// CephFilesystemSubVolumeGroups returns a CephFilesystemSubVolumeGroupInformer.
+func (v *version) CephFilesystemSubVolumeGroups() CephFilesystemSubVolumeGroupInformer {
+	return &cephFilesystemSubVolumeGroupInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
 // CephNFSes returns a CephNFSInformer.

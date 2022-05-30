@@ -32,7 +32,7 @@ func TestBuildStretchClusterCrushRule(t *testing.T) {
 	err := json.Unmarshal([]byte(testCrushMap), &crushMap)
 	assert.NoError(t, err)
 
-	pool := &cephv1.PoolSpec{
+	pool := cephv1.PoolSpec{
 		FailureDomain: "datacenter",
 		CrushRoot:     cephv1.DefaultCRUSHRoot,
 		Replicated: cephv1.ReplicatedSpec{
@@ -40,19 +40,19 @@ func TestBuildStretchClusterCrushRule(t *testing.T) {
 		},
 	}
 
-	rule := buildTwoStepCrushRule(crushMap, "stretched", *pool)
+	rule := buildTwoStepCrushRule(crushMap, "stretched", pool)
 	assert.Equal(t, 2, rule.ID)
 }
 
 func TestBuildCrushSteps(t *testing.T) {
-	pool := &cephv1.PoolSpec{
+	pool := cephv1.PoolSpec{
 		FailureDomain: "datacenter",
 		CrushRoot:     cephv1.DefaultCRUSHRoot,
 		Replicated: cephv1.ReplicatedSpec{
 			ReplicasPerFailureDomain: 2,
 		},
 	}
-	steps := buildTwoStepCrushSteps(*pool)
+	steps := buildTwoStepCrushSteps(pool)
 	assert.Equal(t, 4, len(steps))
 	assert.Equal(t, cephv1.DefaultCRUSHRoot, steps[0].ItemName)
 	assert.Equal(t, "datacenter", steps[1].Type)
@@ -97,7 +97,7 @@ func TestInjectCRUSHMapMap(t *testing.T) {
 		return "", errors.Errorf("unexpected ceph command '%v'", args)
 	}
 
-	err := injectCRUSHMap(&clusterd.Context{Executor: executor}, AdminClusterInfo("mycluster"), "/tmp/063990228.compiled")
+	err := injectCRUSHMap(&clusterd.Context{Executor: executor}, AdminTestClusterInfo("mycluster"), "/tmp/063990228.compiled")
 	assert.Nil(t, err)
 }
 
@@ -111,7 +111,7 @@ func TestSetCRUSHMapMap(t *testing.T) {
 		return "", errors.Errorf("unexpected ceph command '%v'", args)
 	}
 
-	err := setCRUSHMap(&clusterd.Context{Executor: executor}, AdminClusterInfo("mycluster"), "/tmp/063990228.compiled")
+	err := setCRUSHMap(&clusterd.Context{Executor: executor}, AdminTestClusterInfo("mycluster"), "/tmp/063990228.compiled")
 	assert.Nil(t, err)
 }
 

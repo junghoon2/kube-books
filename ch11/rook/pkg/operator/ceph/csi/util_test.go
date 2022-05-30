@@ -17,123 +17,46 @@ limitations under the License.
 package csi
 
 import (
-	"io/ioutil"
 	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"k8s.io/client-go/kubernetes/fake"
-)
-
-var (
-	testDSTemplate = []byte(`
-kind: DaemonSet
-apiVersion: apps/v1
-metadata:
-  name: test-label
-  namespace: {{ .Namespace }}
-spec:
-  selector:
-    matchLabels:
-      app: test-label
-  template:
-    metadata:
-      labels:
-        app: test-label
-    spec:
-      serviceAccount: test-sa
-      containers:
-        - name: registrar
-          image: {{ .RegistrarImage }}
-        - name: rbdplugin
-          image: {{ .CSIPluginImage }}
-        - name: cephfsplugin
-          image: {{ .CSIPluginImage }}
-`)
-	testDepTemplate = []byte(`
-kind: Deployment
-apiVersion: apps/v1
-metadata:
-  name: test-label
-  namespace: {{ .Namespace }}
-spec:
-  replicas: {{ .ProvisionerReplicas }}
-  selector:
-    matchLabels:
-      app: test-label
-  template:
-    metadata:
-      labels:
-        app: test-label
-    spec:
-      serviceAccount: test-sa
-      containers:
-        - name: csi-attacher
-          image: {{ .AttacherImage }}
-        - name: csi-snapshotter
-          image: {{ .SnapshotterImage }}
-        - name: csi-resizer
-          image: {{ .ResizerImage }}
-        - name: csi-provisioner
-          image: {{ .ProvisionerImage }}
-        - name: csi-cephfsplugin
-          image: {{ .CSIPluginImage }}
-`)
+	"gopkg.in/yaml.v2"
 )
 
 func TestDaemonSetTemplate(t *testing.T) {
-	tmp, err := ioutil.TempFile("", "yaml")
-	assert.Nil(t, err)
-
-	defer os.Remove(tmp.Name())
-
-	_, err = tmp.Write(testDSTemplate)
-	assert.Nil(t, err)
-	err = tmp.Close()
-	assert.Nil(t, err)
-
 	tp := templateParam{
 		Param:     CSIParam,
 		Namespace: "foo",
 	}
-	_, err = templateToDaemonSet("test-ds", tmp.Name(), tp)
+	ds, err := templateToDaemonSet("test-ds", RBDPluginTemplatePath, tp)
 	assert.Nil(t, err)
+	assert.Equal(t, "driver-registrar", ds.Spec.Template.Spec.Containers[0].Name)
 }
 
 func TestDeploymentTemplate(t *testing.T) {
-	tmp, err := ioutil.TempFile("", "yaml")
-	assert.Nil(t, err)
-
-	defer os.Remove(tmp.Name())
-
-	_, err = tmp.Write(testDepTemplate)
-	assert.Nil(t, err)
-	err = tmp.Close()
-	assert.Nil(t, err)
-
 	tp := templateParam{
 		Param:     CSIParam,
 		Namespace: "foo",
 	}
-	_, err = templateToDeployment("test-dep", tmp.Name(), tp)
+	_, err := templateToDeployment("test-dep", RBDProvisionerDepTemplatePath, tp)
 	assert.Nil(t, err)
 }
 
-func Test_getPortFromConfig(t *testing.T) {
-	k8s := fake.NewSimpleClientset()
-
+func TestGetPortFromConfig(t *testing.T) {
 	var key = "TEST_CSI_PORT_ENV"
 	var defaultPort uint16 = 8000
+	data := map[string]string{}
 
 	// empty env variable
-	port, err := getPortFromConfig(k8s, key, defaultPort)
+	port, err := getPortFromConfig(data, key, defaultPort)
 	assert.Nil(t, err)
 	assert.Equal(t, port, defaultPort)
 
 	// valid port is set in env
 	err = os.Setenv(key, "9000")
 	assert.Nil(t, err)
-	port, err = getPortFromConfig(k8s, key, defaultPort)
+	port, err = getPortFromConfig(data, key, defaultPort)
 	assert.Nil(t, err)
 	assert.Equal(t, port, uint16(9000))
 
@@ -142,7 +65,7 @@ func Test_getPortFromConfig(t *testing.T) {
 	// higher port value is set in env
 	err = os.Setenv(key, "65536")
 	assert.Nil(t, err)
-	port, err = getPortFromConfig(k8s, key, defaultPort)
+	port, err = getPortFromConfig(data, key, defaultPort)
 	assert.Error(t, err)
 	assert.Equal(t, port, defaultPort)
 
@@ -151,10 +74,45 @@ func Test_getPortFromConfig(t *testing.T) {
 	// negative port is set in env
 	err = os.Setenv(key, "-1")
 	assert.Nil(t, err)
-	port, err = getPortFromConfig(k8s, key, defaultPort)
+	port, err = getPortFromConfig(data, key, defaultPort)
 	assert.Error(t, err)
 	assert.Equal(t, port, defaultPort)
 
 	err = os.Unsetenv(key)
 	assert.Nil(t, err)
+}
+
+func TestApplyingResourcesToRBDPlugin(t *testing.T) {
+	tp := templateParam{}
+	rbdPlugin, err := templateToDaemonSet("rbdplugin", RBDPluginTemplatePath, tp)
+	assert.Nil(t, err)
+	params := make(map[string]string)
+
+	// need to build using map[string]interface{} because the following resource
+	// doesn't serialise nicely
+	// https://pkg.go.dev/k8s.io/apimachinery/pkg/api/resource#Quantity
+	resource := []map[string]interface{}{
+		{
+			"name": "driver-registrar",
+			"resource": map[string]interface{}{
+				"limits": map[string]interface{}{
+					"cpu":    "200m",
+					"memory": "256Mi",
+				},
+				"requests": map[string]interface{}{
+					"cpu":    "100m",
+					"memory": "128Mi",
+				},
+			},
+		},
+	}
+
+	resourceRaw, err := yaml.Marshal(resource)
+	assert.Nil(t, err)
+	params[rbdPluginResource] = string(resourceRaw)
+	applyResourcesToContainers(params, rbdPluginResource, &rbdPlugin.Spec.Template.Spec)
+	assert.Equal(t, rbdPlugin.Spec.Template.Spec.Containers[0].Resources.Requests.Memory().String(), "128Mi")
+	assert.Equal(t, rbdPlugin.Spec.Template.Spec.Containers[0].Resources.Limits.Memory().String(), "256Mi")
+	assert.Equal(t, rbdPlugin.Spec.Template.Spec.Containers[0].Resources.Requests.Cpu().String(), "100m")
+	assert.Equal(t, rbdPlugin.Spec.Template.Spec.Containers[0].Resources.Limits.Cpu().String(), "200m")
 }

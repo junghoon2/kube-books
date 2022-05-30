@@ -25,16 +25,24 @@ import (
 )
 
 var (
-	//minimum supported version is 3.3.0
-	minimum = CephCSIVersion{3, 3, 0}
+	//minimum supported version is 3.5.0
+	minimum = CephCSIVersion{3, 5, 0}
 	//supportedCSIVersions are versions that rook supports
-	releasev330          = CephCSIVersion{3, 3, 0}
-	releasev340          = CephCSIVersion{3, 4, 0}
+	releasev350 = CephCSIVersion{3, 5, 0}
+	releasev360 = CephCSIVersion{3, 6, 0}
+
 	supportedCSIVersions = []CephCSIVersion{
 		minimum,
-		releasev330,
-		releasev340,
+		releasev350,
+		releasev360,
 	}
+
+	// custom ceph.conf is supported in v3.5.0+
+	cephConfSupportedVersion = CephCSIVersion{3, 5, 0}
+
+	// multus fix with the extra holder pod is supported with at least v3.6.1
+	multusSupportedVersion = CephCSIVersion{3, 6, 1}
+
 	// for parsing the output of `cephcsi`
 	versionCSIPattern = regexp.MustCompile(`v(\d+)\.(\d+)\.(\d+)`)
 )
@@ -111,4 +119,25 @@ func extractCephCSIVersion(src string) (*CephCSIVersion, error) {
 	}
 
 	return &CephCSIVersion{major, minor, bugfix}, nil
+}
+
+// SupportsCustomCephConf checks if the detected version supports custom ceph.conf
+func (v *CephCSIVersion) SupportsCustomCephConf() bool {
+	// if AllowUnsupported is set also a csi-image greater than the supported ones are allowed
+	if AllowUnsupported {
+		return true
+	}
+
+	return v.isAtLeast(&cephConfSupportedVersion)
+}
+
+// SupportsMultus checks if the csi image has support for calling "nsenter" while executing
+// mount/map commands. This is needed for Multus scenarios.
+func (v *CephCSIVersion) SupportsMultus() bool {
+	// if AllowUnsupported is set also a csi-image greater than the supported ones are allowed
+	if AllowUnsupported {
+		return true
+	}
+
+	return v.isAtLeast(&multusSupportedVersion)
 }

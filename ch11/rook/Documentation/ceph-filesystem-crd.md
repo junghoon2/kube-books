@@ -31,7 +31,8 @@ spec:
     replicated:
       size: 3
   dataPools:
-    - failureDomain: host
+    - name: replicated
+      failureDomain: host
       replicated:
         size: 3
   preserveFilesystemOnDelete: true
@@ -65,7 +66,7 @@ spec:
     #    memory: "1024Mi"
 ```
 
-(These definitions can also be found in the [`filesystem.yaml`](https://github.com/rook/rook/blob/{{ branchName }}/cluster/examples/kubernetes/ceph/filesystem.yaml) file)
+(These definitions can also be found in the [`filesystem.yaml`](https://github.com/rook/rook/blob/{{ branchName }}/deploy/examples/filesystem.yaml) file)
 
 ### Erasure Coded
 
@@ -86,7 +87,11 @@ spec:
     replicated:
       size: 3
   dataPools:
-    - erasureCoded:
+    - name: default
+      replicated:
+        size: 3
+    - name: erasurecoded
+      erasureCoded:
         dataChunks: 2
         codingChunks: 1
   metadataServer:
@@ -94,8 +99,10 @@ spec:
     activeStandby: true
 ```
 
-(These definitions can also be found in the [`filesystem-ec.yaml`](https://github.com/rook/rook/blob/{{ branchName }}/cluster/examples/kubernetes/ceph/filesystem-ec.yaml) file.
-Also see an example in the [`storageclass-ec.yaml`](https://github.com/rook/rook/blob/{{ branchName }}/cluster/examples/kubernetes/ceph/csi/cephfs/storageclass-ec.yaml) for how to configure the volume.)
+**IMPORTANT**: For erasure coded pools, we have to create a replicated pool as the default data pool and an erasure-coded pool as a secondary pool.
+
+(These definitions can also be found in the [`filesystem-ec.yaml`](https://github.com/rook/rook/blob/{{ branchName }}/deploy/examples/filesystem-ec.yaml) file.
+Also see an example in the [`storageclass-ec.yaml`](https://github.com/rook/rook/blob/{{ branchName }}/deploy/examples/csi/cephfs/storageclass-ec.yaml) for how to configure the volume.)
 
 ### Mirroring
 
@@ -118,7 +125,8 @@ spec:
     replicated:
       size: 3
   dataPools:
-    - failureDomain: host
+    - name: replicated
+      failureDomain: host
       replicated:
         size: 3
   preserveFilesystemOnDelete: true
@@ -183,7 +191,8 @@ See the official cephfs mirror documentation on [how to add a bootstrap peer](ht
 The pools allow all of the settings defined in the Pool CRD spec. For more details, see the [Pool CRD](ceph-pool-crd.md) settings. In the example above, there must be at least three hosts (size 3) and at least eight devices (6 data + 2 coding chunks) in the cluster.
 
 * `metadataPool`: The settings used to create the filesystem metadata pool. Must use replication.
-* `dataPools`: The settings to create the filesystem data pools. If multiple pools are specified, Rook will add the pools to the filesystem. Assigning users or files to a pool is left as an exercise for the reader with the [CephFS documentation](http://docs.ceph.com/docs/master/cephfs/file-layouts/). The data pools can use replication or erasure coding. If erasure coding pools are specified, the cluster must be running with bluestore enabled on the OSDs.
+* `dataPools`: The settings to create the filesystem data pools. Optionally (and we highly recommend), a pool name can be specified with the `name` field to override the default generated name; see more below. If multiple pools are specified, Rook will add the pools to the filesystem. Assigning users or files to a pool is left as an exercise for the reader with the [CephFS documentation](http://docs.ceph.com/docs/master/cephfs/file-layouts/). The data pools can use replication or erasure coding. If erasure coding pools are specified, the cluster must be running with bluestore enabled on the OSDs.
+  * `name`: (optional, and highly recommended) Override the default generated name of the pool. The final pool name will consist of the filesystem name and pool name, e.g., `<fsName>-<poolName>`. We highly recommend to specify `name` to prevent issues that can arise from modifying the spec in a way that causes Rook to lose the original pool ordering.
 * `preserveFilesystemOnDelete`: If it is set to 'true' the filesystem will remain when the
   CephFilesystem resource is deleted. This is a security measure to avoid loss of data if the
   CephFilesystem resource is deleted accidentally. The default value is 'false'. This option
@@ -211,9 +220,11 @@ The metadata server settings correspond to the MDS daemon settings.
     * `duration`:
 * `annotations`: Key value pair list of annotations to add.
 * `labels`: Key value pair list of labels to add.
-* `placement`: The mds pods can be given standard Kubernetes placement restrictions with `nodeAffinity`, `tolerations`, `podAffinity`, and `podAntiAffinity` similar to placement defined for daemons configured by the [cluster CRD](https://github.com/rook/rook/blob/{{ branchName }}/cluster/examples/kubernetes/ceph/cluster.yaml).
+* `placement`: The mds pods can be given standard Kubernetes placement restrictions with `nodeAffinity`, `tolerations`, `podAffinity`, and `podAntiAffinity` similar to placement defined for daemons configured by the [cluster CRD](https://github.com/rook/rook/blob/{{ branchName }}/deploy/examples/cluster.yaml).
 * `resources`: Set resource requests/limits for the Filesystem MDS Pod(s), see [MDS Resources Configuration Settings](#mds-resources-configuration-settings)
 * `priorityClassName`: Set priority class name for the Filesystem MDS Pod(s)
+* `startupProbe` : Disable, or override timing and threshold values of the Filesystem MDS startup probe
+* `livenessProbe` : Disable, or override timing and threshold values of the Filesystem MDS livenessProbe.
 
 ### MDS Resources Configuration Settings
 

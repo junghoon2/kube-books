@@ -19,7 +19,10 @@ package k8sutil
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"sigs.k8s.io/yaml"
 	"strings"
 
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
@@ -31,39 +34,39 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// ValidNodeNoSched returns true if the node (1) meets Rook's placement terms,
+// validNodeNoSched returns true if the node (1) meets Rook's placement terms,
 // and (2) is ready. Unlike ValidNode, this method will ignore the
 // Node.Spec.Unschedulable flag. False otherwise.
-func ValidNodeNoSched(node v1.Node, placement cephv1.Placement) (bool, error) {
+func validNodeNoSched(node v1.Node, placement cephv1.Placement) error {
 	p, err := NodeMeetsPlacementTerms(node, placement, false)
 	if err != nil {
-		return false, fmt.Errorf("failed to check if node meets Rook placement terms. %+v", err)
+		return fmt.Errorf("failed to check if node meets Rook placement terms. %+v", err)
 	}
 	if !p {
-		return false, nil
+		return errors.New("placement settings do not match")
 	}
 
 	if !NodeIsReady(node) {
-		return false, nil
+		return errors.New("node is not ready")
 	}
 
-	return true, nil
+	return nil
 }
 
 // ValidNode returns true if the node (1) is schedulable, (2) meets Rook's placement terms, and
 // (3) is ready. False otherwise.
-func ValidNode(node v1.Node, placement cephv1.Placement) (bool, error) {
+func ValidNode(node v1.Node, placement cephv1.Placement) error {
 	if !GetNodeSchedulable(node) {
-		return false, nil
+		return errors.New("node is unschedulable")
 	}
 
-	return ValidNodeNoSched(node, placement)
+	return validNodeNoSched(node, placement)
 }
 
 // GetValidNodes returns all nodes that (1) are not cordoned, (2) meet Rook's placement terms, and
 // (3) are ready.
-func GetValidNodes(rookStorage cephv1.StorageScopeSpec, clientset kubernetes.Interface, placement cephv1.Placement) []cephv1.Node {
-	matchingK8sNodes, err := GetKubernetesNodesMatchingRookNodes(rookStorage.Nodes, clientset)
+func GetValidNodes(ctx context.Context, rookStorage cephv1.StorageScopeSpec, clientset kubernetes.Interface, placement cephv1.Placement) []cephv1.Node {
+	matchingK8sNodes, err := GetKubernetesNodesMatchingRookNodes(ctx, rookStorage.Nodes, clientset)
 	if err != nil {
 		// cannot list nodes, return empty nodes
 		logger.Errorf("failed to list nodes: %+v", err)
@@ -71,13 +74,19 @@ func GetValidNodes(rookStorage cephv1.StorageScopeSpec, clientset kubernetes.Int
 	}
 
 	validK8sNodes := []v1.Node{}
+	reasonsForSkippingNodes := map[string][]string{}
 	for _, n := range matchingK8sNodes {
-		valid, err := ValidNode(n, placement)
+		err := ValidNode(n, placement)
 		if err != nil {
-			logger.Errorf("failed to validate node %s. %+v", n.Name, err)
-		} else if valid {
+			reason := err.Error()
+			reasonsForSkippingNodes[reason] = append(reasonsForSkippingNodes[reason], n.Name)
+		} else {
 			validK8sNodes = append(validK8sNodes, n)
 		}
+	}
+
+	for reason, nodes := range reasonsForSkippingNodes {
+		logger.Infof("skipping creation of OSDs on nodes %v: %s", nodes, reason)
 	}
 
 	return RookNodesMatchingKubernetesNodes(rookStorage, validK8sNodes)
@@ -86,8 +95,7 @@ func GetValidNodes(rookStorage cephv1.StorageScopeSpec, clientset kubernetes.Int
 // GetNodeNameFromHostname returns the name of the node resource looked up by the hostname label
 // Typically these will be the same name, but sometimes they are not such as when nodes have a longer
 // dns name, but the hostname is short.
-func GetNodeNameFromHostname(clientset kubernetes.Interface, hostName string) (string, error) {
-	ctx := context.TODO()
+func GetNodeNameFromHostname(ctx context.Context, clientset kubernetes.Interface, hostName string) (string, error) {
 	options := metav1.ListOptions{LabelSelector: fmt.Sprintf("%s=%s", v1.LabelHostname, hostName)}
 	nodes, err := clientset.CoreV1().Nodes().List(ctx, options)
 	if err != nil {
@@ -101,8 +109,7 @@ func GetNodeNameFromHostname(clientset kubernetes.Interface, hostName string) (s
 }
 
 // GetNodeHostName returns the hostname label given the node name.
-func GetNodeHostName(clientset kubernetes.Interface, nodeName string) (string, error) {
-	ctx := context.TODO()
+func GetNodeHostName(ctx context.Context, clientset kubernetes.Interface, nodeName string) (string, error) {
 	node, err := clientset.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 	if err != nil {
 		return "", err
@@ -121,8 +128,7 @@ func GetNodeHostNameLabel(node *v1.Node) (string, error) {
 // GetNodeHostNames returns the name of the node resource mapped to their hostname label.
 // Typically these will be the same name, but sometimes they are not such as when nodes have a longer
 // dns name, but the hostname is short.
-func GetNodeHostNames(clientset kubernetes.Interface) (map[string]string, error) {
-	ctx := context.TODO()
+func GetNodeHostNames(ctx context.Context, clientset kubernetes.Interface) (map[string]string, error) {
 	nodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
@@ -269,8 +275,7 @@ func normalizeHostname(kubernetesNode v1.Node) string {
 
 // GetKubernetesNodesMatchingRookNodes lists all the nodes in Kubernetes and returns all the
 // Kubernetes nodes that have a corresponding match in the list of Rook nodes.
-func GetKubernetesNodesMatchingRookNodes(rookNodes []cephv1.Node, clientset kubernetes.Interface) ([]v1.Node, error) {
-	ctx := context.TODO()
+func GetKubernetesNodesMatchingRookNodes(ctx context.Context, rookNodes []cephv1.Node, clientset kubernetes.Interface) ([]v1.Node, error) {
 	nodes := []v1.Node{}
 	k8sNodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -287,8 +292,7 @@ func GetKubernetesNodesMatchingRookNodes(rookNodes []cephv1.Node, clientset kube
 }
 
 // GetNotReadyKubernetesNodes lists all the nodes that are in NotReady state
-func GetNotReadyKubernetesNodes(clientset kubernetes.Interface) ([]v1.Node, error) {
-	ctx := context.TODO()
+func GetNotReadyKubernetesNodes(ctx context.Context, clientset kubernetes.Interface) ([]v1.Node, error) {
 	nodes := []v1.Node{}
 	k8sNodes, err := clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -319,6 +323,11 @@ func RookNodesMatchingKubernetesNodes(rookStorage cephv1.StorageScopeSpec, kuber
 
 // GenerateNodeAffinity will return v1.NodeAffinity or error
 func GenerateNodeAffinity(nodeAffinity string) (*v1.NodeAffinity, error) {
+	affinity, err := evaluateJSONOrYAMLInput(nodeAffinity)
+	if err == nil {
+		return affinity, nil
+	}
+	logger.Debugf("input not a valid JSON or YAML: %s, continuing", err)
 	newNodeAffinity := &v1.NodeAffinity{
 		RequiredDuringSchedulingIgnoredDuringExecution: &v1.NodeSelector{
 			NodeSelectorTerms: []v1.NodeSelectorTerm{
@@ -375,4 +384,21 @@ func GenerateNodeAffinity(nodeAffinity string) (*v1.NodeAffinity, error) {
 		}
 	}
 	return newNodeAffinity, nil
+}
+
+func evaluateJSONOrYAMLInput(nodeAffinity string) (*v1.NodeAffinity, error) {
+	var err error
+	arr := []byte(nodeAffinity)
+	if !json.Valid(arr) {
+		arr, err = yaml.YAMLToJSON(arr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to process YAML node affinity input: %v", err)
+		}
+	}
+	var affinity *v1.NodeAffinity
+	unmarshalErr := json.Unmarshal(arr, &affinity)
+	if unmarshalErr != nil {
+		return nil, fmt.Errorf("cannot unmarshal affinity: %s", unmarshalErr)
+	}
+	return affinity, nil
 }

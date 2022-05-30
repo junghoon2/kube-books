@@ -101,6 +101,7 @@ func Test_updateExistingOSDs(t *testing.T) {
 		clusterInfo := &cephclient.ClusterInfo{
 			Namespace:   namespace,
 			CephVersion: cephver.Pacific,
+			Context:     context.TODO(),
 		}
 		clusterInfo.SetName("mycluster")
 		clusterInfo.OwnerInfo = cephclient.NewMinimumOwnerInfo(t)
@@ -120,7 +121,7 @@ func Test_updateExistingOSDs(t *testing.T) {
 
 	// stub out the conditionExportFunc to do nothing. we do not have a fake Rook interface that
 	// allows us to interact with a CephCluster resource like the fake K8s clientset.
-	updateConditionFunc = func(c *clusterd.Context, namespaceName types.NamespacedName, conditionType cephv1.ConditionType, status corev1.ConditionStatus, reason cephv1.ConditionReason, message string) {
+	updateConditionFunc = func(ctx context.Context, c *clusterd.Context, namespaceName types.NamespacedName, observedGeneration int64, conditionType cephv1.ConditionType, status corev1.ConditionStatus, reason cephv1.ConditionReason, message string) {
 		// do nothing
 	}
 	shouldCheckOkToStopFunc = func(context *clusterd.Context, clusterInfo *cephclient.ClusterInfo) bool {
@@ -131,6 +132,7 @@ func Test_updateExistingOSDs(t *testing.T) {
 
 	updateMultipleDeploymentsAndWaitFunc =
 		func(
+			ctx context.Context,
 			clientset kubernetes.Interface,
 			deployments []*appsv1.Deployment,
 			listFunc func() (*appsv1.DeploymentList, error),
@@ -491,7 +493,7 @@ func Test_getOSDUpdateInfo(t *testing.T) {
 	}
 	clusterInfo := &cephclient.ClusterInfo{
 		Namespace:   namespace,
-		CephVersion: cephver.Nautilus,
+		CephVersion: cephver.Octopus,
 	}
 	clusterInfo.SetName("mycluster")
 	clusterInfo.OwnerInfo = cephclient.NewMinimumOwnerInfo(t)
@@ -517,13 +519,13 @@ func Test_getOSDUpdateInfo(t *testing.T) {
 		addTestDeployment(clientset, "non-rook-deployment", namespace, map[string]string{})
 
 		// mon.a in this namespace
-		l := controller.CephDaemonAppLabels("rook-ceph-mon", namespace, "mon", "a", true)
+		l := controller.CephDaemonAppLabels("rook-ceph-mon", namespace, "mon", "a", "rook-ceph-operator", "cephclusters.ceph.rook.io", true)
 		addTestDeployment(clientset, "rook-ceph-mon-a", namespace, l)
 
 		// osd.1 and 3 in another namespace (another Rook cluster)
 		clusterInfo2 := &cephclient.ClusterInfo{
 			Namespace:   "other-namespace",
-			CephVersion: cephver.Nautilus,
+			CephVersion: cephver.Octopus,
 		}
 		clusterInfo2.SetName("other-cluster")
 		clusterInfo2.OwnerInfo = cephclient.NewMinimumOwnerInfo(t)

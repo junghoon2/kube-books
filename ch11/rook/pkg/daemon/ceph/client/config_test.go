@@ -18,8 +18,6 @@ package client
 
 import (
 	"context"
-	"io/ioutil"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -29,7 +27,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/coreos/pkg/capnslog"
 	"github.com/go-ini/ini"
 	"github.com/rook/rook/pkg/clusterd"
 	cephver "github.com/rook/rook/pkg/operator/ceph/version"
@@ -45,19 +42,11 @@ func TestCreateDefaultCephConfig(t *testing.T) {
 			"node0": {Name: "mon0", Endpoint: "10.0.0.1:6789"},
 			"node1": {Name: "mon1", Endpoint: "10.0.0.2:6789"},
 		},
-		CephVersion: cephver.Nautilus,
+		CephVersion: cephver.Octopus,
 	}
 
 	// start with INFO level logging
-	context := &clusterd.Context{
-		LogLevel: capnslog.INFO,
-		NetworkInfo: clusterd.NetworkInfo{
-			PublicAddr:     "10.1.1.1",
-			PublicNetwork:  "10.1.1.0/24",
-			ClusterAddr:    "10.1.2.2",
-			ClusterNetwork: "10.1.2.0/24",
-		},
-	}
+	context := &clusterd.Context{}
 
 	cephConfig, err := CreateDefaultCephConfig(context, clusterInfo)
 	if err != nil {
@@ -65,30 +54,17 @@ func TestCreateDefaultCephConfig(t *testing.T) {
 	}
 	verifyConfig(t, cephConfig, clusterInfo, 0)
 
-	// now use DEBUG level logging
-	context.LogLevel = capnslog.DEBUG
-
 	cephConfig, err = CreateDefaultCephConfig(context, clusterInfo)
 	if err != nil {
 		t.Fatalf("failed to create default ceph config. %+v", err)
 	}
 	verifyConfig(t, cephConfig, clusterInfo, 10)
-
-	// verify the network info config
-	assert.Equal(t, "10.1.1.1", cephConfig.PublicAddr)
-	assert.Equal(t, "10.1.1.0/24", cephConfig.PublicNetwork)
-	assert.Equal(t, "10.1.2.2", cephConfig.ClusterAddr)
-	assert.Equal(t, "10.1.2.0/24", cephConfig.ClusterNetwork)
 }
 
 func TestGenerateConfigFile(t *testing.T) {
 	ctx := context.TODO()
 	// set up a temporary config directory that will be cleaned up after test
-	configDir, err := ioutil.TempDir("", "TestGenerateConfigFile")
-	if err != nil {
-		t.Fatalf("failed to create temp config dir: %+v", err)
-	}
-	defer os.RemoveAll(configDir)
+	configDir := t.TempDir()
 
 	// create mocked cluster context and info
 	clientset := test.New(t, 3)
@@ -108,7 +84,7 @@ func TestGenerateConfigFile(t *testing.T) {
 		},
 		Data: data,
 	}
-	_, err = clientset.CoreV1().ConfigMaps(ns).Create(ctx, cm, metav1.CreateOptions{})
+	_, err := clientset.CoreV1().ConfigMaps(ns).Create(ctx, cm, metav1.CreateOptions{})
 	assert.NoError(t, err)
 
 	clusterInfo := &ClusterInfo{
@@ -118,8 +94,9 @@ func TestGenerateConfigFile(t *testing.T) {
 		Monitors: map[string]*MonInfo{
 			"node0": {Name: "mon0", Endpoint: "10.0.0.1:6789"},
 		},
-		CephVersion: cephver.Nautilus,
+		CephVersion: cephver.Octopus,
 		CephCred:    CephCred{Username: "admin", Secret: "mysecret"},
+		Context:     ctx,
 	}
 
 	isInitialized := clusterInfo.IsInitialized(true)

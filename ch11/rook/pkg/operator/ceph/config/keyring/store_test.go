@@ -50,7 +50,7 @@ func TestGenerateKey(t *testing.T) {
 	}
 	ns := "rook-ceph"
 	ownerInfo := k8sutil.OwnerInfo{}
-	s := GetSecretStore(ctx, &cephclient.ClusterInfo{Namespace: ns}, &ownerInfo)
+	s := GetSecretStore(ctx, cephclient.AdminTestClusterInfo(ns), &ownerInfo)
 
 	generateKey = "generatedsecretkey"
 	failGenerateKey = false

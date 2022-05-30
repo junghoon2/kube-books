@@ -7,7 +7,7 @@ set -e
 #############
 
 rook_git_root=$(git rev-parse --show-toplevel)
-rook_kube_templates_dir="$rook_git_root/cluster/examples/kubernetes/ceph/"
+rook_kube_templates_dir="$rook_git_root/deploy/examples/"
 
 
 #############
@@ -50,7 +50,7 @@ function purge_ceph_vms {
     vagrant ssh "$i" -c "cat << 'EOF' > /tmp/purge-ceph.sh
     sudo rm -rf /var/lib/rook
     for disk in \$(sudo blkid | awk '/ROOK/ {print \$1}' | sed 's/[0-9]://' | uniq); do
-    sudo dd if=/dev/zero of=\$disk bs=1M count=20 oflag=direct
+    sudo dd if=/dev/zero of=\$disk bs=1M count=20 oflag=direct,dsync
     done
 EOF"
     vagrant ssh "$i" -c "bash /tmp/purge-ceph.sh"

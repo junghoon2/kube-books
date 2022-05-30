@@ -37,6 +37,7 @@ spec:
   preservePoolsOnDelete: true
   gateway:
     # sslCertificateRef:
+    # caBundleRef:
     port: 80
     # securePort: 443
     instances: 1
@@ -91,7 +92,21 @@ When the `zone` section is set pools with the object stores name will not be cre
 The gateway settings correspond to the RGW daemon settings.
 
 * `type`: `S3` is supported
-* `sslCertificateRef`: If specified, this is the name of the Kubernetes secret(`opaque` or `tls` type) that contains the TLS certificate to be used for secure connections to the object store. Rook will look in the secret provided at the `cert` key name. The value of the `cert` key must be in the format expected by the [RGW service](https://docs.ceph.com/docs/master/install/ceph-deploy/install-ceph-gateway/#using-ssl-with-civetweb): "The server key, server certificate, and any other CA or intermediate certificates be supplied in one file. Each of these items must be in PEM form."
+* `sslCertificateRef`: If specified, this is the name of the Kubernetes secret(`opaque` or `tls`
+  type) that contains the TLS certificate to be used for secure connections to the object store.
+  If it is an opaque Kubernetes Secret, Rook will look in the secret provided at the `cert` key name. The value of the `cert` key must be
+  in the format expected by the [RGW
+  service](https://docs.ceph.com/docs/master/install/ceph-deploy/install-ceph-gateway/#using-ssl-with-civetweb):
+  "The server key, server certificate, and any other CA or intermediate certificates be supplied in
+  one file. Each of these items must be in PEM form." They are scenarios where the certificate DNS is set for a particular domain
+  that does not include the local Kubernetes DNS, namely the object store DNS service endpoint. If
+  adding the service DNS name to the certificate is not empty another key can be specified in the
+  secret's data: `insecureSkipVerify: true` to skip the certificate verification. It is not
+  recommended to enable this option since TLS is susceptible to machine-in-the-middle attacks unless
+  custom verification is used.
+* `caBundleRef`: If specified, this is the name of the Kubernetes secret (type `opaque`) that
+  contains additional custom ca-bundle to use. The secret must be in the same namespace as the Rook
+  cluster. Rook will look in the secret provided at the `cabundle` key name.
 * `port`: The port on which the Object service will be reachable. If host networking is enabled, the RGW daemons will also listen on that port. If running on SDN, the RGW daemon listening port will be 8080 internally.
 * `securePort`: The secure port on which RGW pods will be listening. A TLS certificate must be specified either via `sslCerticateRef` or `service.annotations`
 * `instances`: The number of pods that will be started to load balance this object store.
@@ -148,6 +163,12 @@ Rook-Ceph will be default monitor the state of the object store endpoints.
 The following CRD settings are available:
 
 * `healthCheck`: main object store health monitoring section
+  * `bucket`: Rook checks that the object store is usable regularly. This is explained in more
+    detail below. Use this config to disable or change the interval at which Rook verifies the
+    object store connectivity.
+  * `startupProbe`: Disable, or override timing and threshold values of the object gateway startup probe.
+  * `livenessProbe`: Disable, or override timing and threshold values of the object gateway liveness probe.
+  * `readinessProbe`: Disable, or override timing and threshold values of the object gateway readiness probe.
 
 Here is a complete example:
 
@@ -156,6 +177,16 @@ healthCheck:
   bucket:
     disabled: false
     interval: 60s
+  startupProbe:
+    disabled: false
+  livenessProbe:
+    disabled: false
+    periodSeconds: 5
+    failureThreshold: 4
+  readinessProbe:
+    disabled: false
+    periodSeconds: 5
+    failureThreshold: 2
 ```
 
 The endpoint health check procedure is the following:
@@ -197,7 +228,7 @@ For RGW, please note the following:
 $ vault kv put rook/<mybucketkey> key=$(openssl rand -base64 32) # kv engine
 $ vault write -f transit/keys/<mybucketkey> exportable=true # transit engine
 
-* TLS authentication with custom certs between Vault and RGW are yet to be supported.
+* TLS authentication with custom certificates between Vault and CephObjectStore RGWs are supported from ceph v16.2.6 onwards
 
 ## Deleting a CephObjectStore
 

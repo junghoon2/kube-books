@@ -40,9 +40,10 @@ The service accounts are:
 * `default` (namespace: `rook-ceph`): Will affect most pods in the `rook-ceph` namespace.
 * `rook-ceph-mgr` (namespace: `rook-ceph`): Will affect the MGR pods in the `rook-ceph` namespace.
 * `rook-ceph-osd` (namespace: `rook-ceph`): Will affect the OSD pods in the `rook-ceph` namespace.
+* `rook-ceph-rgw` (namespace: `rook-ceph`): Will affect the RGW pods in the `rook-ceph` namespace.
 
-You can do it either via e.g. `kubectl -n <namespace> edit serviceaccount default` or by modifying the [`operator.yaml`](https://github.com/rook/rook/blob/master/cluster/examples/kubernetes/ceph/operator.yaml)
-and [`cluster.yaml`](https://github.com/rook/rook/blob/master/cluster/examples/kubernetes/ceph/cluster.yaml) before deploying them.
+You can do it either via e.g. `kubectl -n <namespace> edit serviceaccount default` or by modifying the [`operator.yaml`](https://github.com/rook/rook/blob/master/deploy/examples/operator.yaml)
+and [`cluster.yaml`](https://github.com/rook/rook/blob/master/deploy/examples/cluster.yaml) before deploying them.
 
 Since it's the same procedure for all service accounts, here is just one example:
 

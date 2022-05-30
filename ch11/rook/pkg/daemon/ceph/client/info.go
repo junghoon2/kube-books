@@ -17,6 +17,7 @@ limitations under the License.
 package client
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"testing"
@@ -41,11 +42,20 @@ type ClusterInfo struct {
 	CephVersion   cephver.CephVersion
 	Namespace     string
 	OwnerInfo     *k8sutil.OwnerInfo
+	RequireMsgr2  bool
 	// Hide the name of the cluster since in 99% of uses we want to use the cluster namespace.
 	// If the CR name is needed, access it through the NamespacedName() method.
 	name              string
 	OsdUpgradeTimeout time.Duration
 	NetworkSpec       cephv1.NetworkSpec
+	// A context to cancel the context it is used to determine whether the reconcile loop should
+	// exist (if the context has been cancelled). This cannot be in main clusterd context since this
+	// is a pointer passed through the entire life cycle or the operator. If the context is
+	// cancelled it will immedialy be re-created, thus existing reconciles loops will not be
+	// cancelled.
+	// Whereas if passed through clusterInfo, we don't have that problem since clusterInfo is
+	// re-hydrated when a context is cancelled.
+	Context context.Context
 }
 
 // MonInfo is a collection of information about a Ceph mon.
@@ -78,19 +88,24 @@ func (c *ClusterInfo) NamespacedName() types.NamespacedName {
 }
 
 // AdminClusterInfo() creates a ClusterInfo with the basic info to access the cluster
-// as an admin. Only a few fields are set in the struct,
-// so this clusterInfo cannot be used to generate the mon config or request the
-// namespacedName. A full cluster info must be populated for those operations.
-func AdminClusterInfo(namespace string) *ClusterInfo {
+// as an admin.
+func AdminClusterInfo(ctx context.Context, namespace, name string) *ClusterInfo {
 	ownerInfo := k8sutil.NewOwnerInfoWithOwnerRef(&metav1.OwnerReference{}, "")
 	return &ClusterInfo{
 		Namespace: namespace,
 		CephCred: CephCred{
 			Username: AdminUsername,
 		},
-		name:      "testing",
+		name:      name,
 		OwnerInfo: ownerInfo,
+		Context:   ctx,
 	}
+}
+
+// AdminTestClusterInfo() creates a ClusterInfo with the basic info to access the cluster
+// as an admin. This cluster info should only be used by unit or integration tests.
+func AdminTestClusterInfo(namespace string) *ClusterInfo {
+	return AdminClusterInfo(context.TODO(), namespace, "testing")
 }
 
 // IsInitialized returns true if the critical information in the ClusterInfo struct has been filled
@@ -119,6 +134,14 @@ func (c *ClusterInfo) IsInitialized(logError bool) bool {
 	} else if c.CephCred.Secret == "" {
 		if logError {
 			logger.Error("ceph secret is empty")
+		}
+	} else if c.Context == nil {
+		if logError {
+			logger.Error("nil context")
+		}
+	} else if c.Context.Err() != nil {
+		if logError {
+			logger.Errorf("%v", c.Context.Err())
 		}
 	} else {
 		isInitialized = true
