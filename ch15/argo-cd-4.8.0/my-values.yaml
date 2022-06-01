@@ -30,10 +30,10 @@ global:
   # -- If defined, uses a Secret to pull an image from a private Docker registry or repository
   imagePullSecrets: []
   # -- Mapping between IP and hostnames that will be injected as entries in the pod's hosts files
-  hostAliases: []
-  # - ip: 10.20.30.40
-  #   hostnames:
-  #   - git.myhostname
+  hostAliases:
+  - ip: 172.17.29.68
+    hostnames:
+    - gitlab.myweb.io
 
   # -- Additional labels to add to all resources
   additionalLabels: {}
@@ -107,7 +107,7 @@ controller:
   replicas: 1
 
   # -- Deploy the application controller as a StatefulSet instead of a Deployment, this is required for HA capability.
-  enableStatefulSet: true
+  enableStatefulSet: false
 
   ## Application controller commandline flags
   args:
@@ -1001,7 +1001,7 @@ server:
     # -- Server service labels
     labels: {}
     # -- Server service type
-    type: ClusterIP
+    type: LoadBalancer
     # -- Server service http port for NodePort service type (only if `server.service.type` is set to "NodePort")
     nodePortHttp: 30080
     # -- Server service https port for NodePort service type (only if `server.service.type` is set to "NodePort")
