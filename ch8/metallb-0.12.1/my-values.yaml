@@ -27,7 +27,8 @@ configInline:
    - name: default
      protocol: layer2
      addresses:
-     - 172.17.29.65 - 172.17.29.75
+     - 172.17.29.65 - 172.17.29.70
+     - 172.17.29.170 - 172.17.29.179
 
 rbac:
   # create specifies whether to install and use RBAC rules.
