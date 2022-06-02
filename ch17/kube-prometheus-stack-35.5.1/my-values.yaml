@@ -336,7 +336,7 @@ alertmanager:
 
     ## Service type
     ##
-    type: ClusterIP
+    type: NodePort
 
   ## Configuration for creating a separate Service for each statefulset Alertmanager replica
   ##
@@ -670,7 +670,7 @@ grafana:
   ## Timezone for the default dashboards
   ## Other options are: browser or a specific timezone, i.e. Europe/Luxembourg
   ##
-  defaultDashboardsTimezone: utc
+  defaultDashboardsTimezone: Asia/Seoul
 
   adminPassword: prom-operator
 
@@ -1163,7 +1163,7 @@ kubeDns:
 ## Component scraping etcd
 ##
 kubeEtcd:
-  enabled: true
+  enabled: false
 
   ## If your etcd is not deployed as a pod, specify IPs it can be found on
   ##
@@ -1294,7 +1294,7 @@ kubeScheduler:
 ## Component scraping kube proxy
 ##
 kubeProxy:
-  enabled: true
+  enabled: false
 
   ## If your kube proxy is not deployed as a pod, specify IPs it can be found on
   ##
@@ -1897,7 +1897,7 @@ prometheus:
 
     ## Service type
     ##
-    type: ClusterIP
+    type: NodePort
 
     ## Additional port to define in the Service
     additionalPorts: []
@@ -2288,7 +2288,7 @@ prometheus:
     ## prometheus resource to be created with selectors based on values in the helm deployment,
     ## which will also match the servicemonitors created
     ##
-    serviceMonitorSelectorNilUsesHelmValues: true
+    serviceMonitorSelectorNilUsesHelmValues: false
 
     ## ServiceMonitors to be selected for target discovery.
     ## If {}, select all ServiceMonitors
@@ -2349,11 +2349,11 @@ prometheus:
 
     ## How long to retain metrics
     ##
-    retention: 10d
+    retention: 5d
 
     ## Maximum size of metrics
     ##
-    retentionSize: ""
+    retentionSize: "10GiB"
 
     ## Enable compression of the write-ahead log using Snappy.
     ##
@@ -2449,16 +2449,16 @@ prometheus:
     ## Prometheus StorageSpec for persistent data
     ## ref: https://github.com/prometheus-operator/prometheus-operator/blob/main/Documentation/user-guides/storage.md
     ##
-    storageSpec: {}
+    storageSpec:
     ## Using PersistentVolumeClaim
     ##
-    #  volumeClaimTemplate:
-    #    spec:
-    #      storageClassName: gluster
-    #      accessModes: ["ReadWriteOnce"]
-    #      resources:
-    #        requests:
-    #          storage: 50Gi
+     volumeClaimTemplate:
+       spec:
+         storageClassName: openebs-hostpath
+         accessModes: ["ReadWriteOnce"]
+         resources:
+           requests:
+             storage: 15Gi
     #    selector: {}
 
     ## Using tmpfs volume
