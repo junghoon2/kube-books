@@ -118,7 +118,7 @@ loki:
     {{- end -}}
 
   # Should authentication be enabled
-  authEnabled: true
+  authEnabled: false
 
   # -- Check https://grafana.com/docs/loki/latest/configuration/#common_config for more info on how to provide a common configuration
   commonConfig:
