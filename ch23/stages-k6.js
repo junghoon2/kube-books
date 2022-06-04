@@ -14,7 +14,7 @@ export const options = {
 
 export default function () {
   // const res = http.get('https://httpbin.org/');
-  const res = http.get('http://172.17.29.65/');
+  const res = http.get('http://172.17.29.67/');
   check(res, { 'status was 200': (r) => r.status == 200 });
   sleep(1);
 }
