@@ -13,20 +13,17 @@ all:
       hosts:
         ubun20-01:
         ubun20-02:
-        # ubun20-03:
         ubun20-04:
     kube_node:                                                                                              
       hosts:
         ubun20-01:
         ubun20-02:
-        # ubun20-03:
         ubun20-04:
         ubun20-05:
     etcd:                                                                                         
       hosts:
         ubun20-01:
         ubun20-02:
-        # ubun20-03:
         ubun20-04:
     k8s_cluster:
       children:
