@@ -10,6 +10,6 @@ export let options = {
 };
 
 export default function () {
-  http.get('http://172.17.29.66');
+  http.get('http://172.17.29.71');
   sleep(1);
 }
