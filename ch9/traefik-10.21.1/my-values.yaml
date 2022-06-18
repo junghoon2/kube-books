@@ -13,7 +13,7 @@ deployment:
   # Can be either Deployment or DaemonSet
   kind: Deployment
   # Number of pods of the deployment (only applies when kind == Deployment)
-  replicas: 1
+  replicas: 2
   # Amount of time (in seconds) before Kubernetes will send the SIGKILL signal if Traefik does not shut down
   terminationGracePeriodSeconds: 60
   # The minimum number of seconds Traefik needs to be up and running before the DaemonSet/Deployment controller considers it available
@@ -298,7 +298,7 @@ ports:
     # You SHOULD NOT expose the traefik port on production deployments.
     # If you want to access it from outside of your cluster,
     # use `kubectl port-forward` or create a secure ingress
-    expose: false
+    expose: true
     # The exposed port for this service
     exposedPort: 9000
     # The port protocol (TCP/UDP)
@@ -489,19 +489,20 @@ resources: {}
   # limits:
   #   cpu: "300m"
   #   memory: "150Mi"
-affinity: {}
+affinity:
 # # This example pod anti-affinity forces the scheduler to put traefik pods
 # # on nodes where no other traefik pods are scheduled.
 # # It should be used when hostNetwork: true to prevent port conflicts
-#   podAntiAffinity:
-#     requiredDuringSchedulingIgnoredDuringExecution:
-#       - labelSelector:
-#           matchExpressions:
-#             - key: app.kubernetes.io/name
-#               operator: In
-#               values:
-#                 - {{ template "traefik.name" . }}
-#         topologyKey: kubernetes.io/hostname
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+              - traefik
+                # - {{ template "traefik.name" . }}
+        topologyKey: kubernetes.io/hostname
 nodeSelector: {}
 tolerations: []
 
