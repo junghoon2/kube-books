@@ -13,7 +13,7 @@ deployment:
   # Can be either Deployment or DaemonSet
   kind: Deployment
   # Number of pods of the deployment (only applies when kind == Deployment)
-  replicas: 1
+  replicas: 2
   # Amount of time (in seconds) before Kubernetes will send the SIGKILL signal if Traefik does not shut down
   terminationGracePeriodSeconds: 60
   # The minimum number of seconds Traefik needs to be up and running before the DaemonSet/Deployment controller considers it available
@@ -133,7 +133,6 @@ providers:
     enabled: true
     allowCrossNamespace: false
     allowExternalNameServices: false
-    allowEmptyServices: false
     # ingressClass: traefik-internal
     # labelSelector: environment=production,method=traefik
     namespaces: []
@@ -298,7 +297,7 @@ ports:
     # You SHOULD NOT expose the traefik port on production deployments.
     # If you want to access it from outside of your cluster,
     # use `kubectl port-forward` or create a secure ingress
-    expose: false
+    expose: true
     # The exposed port for this service
     exposedPort: 9000
     # The port protocol (TCP/UDP)
@@ -434,27 +433,6 @@ persistence:
   annotations: {}
   # subPath: "" # only mount a subpath of the Volume into the pod
 
-certResolvers: {}
-#   letsencrypt:
-#     # for challenge options cf. https://doc.traefik.io/traefik/https/acme/
-#     email: email@example.com
-#     dnsChallenge:
-#       # also add the provider's required configuration under env
-#       # or expand then from secrets/configmaps with envfrom
-#       # cf. https://doc.traefik.io/traefik/https/acme/#providers
-#       provider: digitalocean
-#       # add futher options for the dns challenge as needed
-#       # cf. https://doc.traefik.io/traefik/https/acme/#dnschallenge
-#       delayBeforeCheck: 30
-#       resolvers:
-#         - 1.1.1.1
-#         - 8.8.8.8
-#     tlsChallenge: true
-#     httpChallenge:
-#       entryPoint: "web"
-#     # match the path to persistence
-#     storage: /data/acme.json
-
 # If hostNetwork is true, runs traefik in the host network namespace
 # To prevent unschedulabel pods due to port collisions, if hostNetwork=true
 # and replicas>1, a pod anti-affinity is recommended and will be set if the
@@ -489,19 +467,20 @@ resources: {}
   # limits:
   #   cpu: "300m"
   #   memory: "150Mi"
-affinity: {}
+affinity:
 # # This example pod anti-affinity forces the scheduler to put traefik pods
 # # on nodes where no other traefik pods are scheduled.
 # # It should be used when hostNetwork: true to prevent port conflicts
-#   podAntiAffinity:
-#     requiredDuringSchedulingIgnoredDuringExecution:
-#       - labelSelector:
-#           matchExpressions:
-#             - key: app.kubernetes.io/name
-#               operator: In
-#               values:
-#                 - {{ template "traefik.name" . }}
-#         topologyKey: kubernetes.io/hostname
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+              - traefik
+                # - {{ template "traefik.name" . }}
+        topologyKey: kubernetes.io/hostname
 nodeSelector: {}
 tolerations: []
 
