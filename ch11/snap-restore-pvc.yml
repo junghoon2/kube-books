@@ -5,7 +5,7 @@ metadata:
 spec:
   storageClassName: rook-ceph-block  # PVC 복구에 사용할 StorageClass 지정 
   dataSource:
-    name: mysql-snapshot-211015
+    name: mysql-snapshot-01
     kind: VolumeSnapshot
     apiGroup: snapshot.storage.k8s.io
   accessModes:
