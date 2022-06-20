@@ -12,7 +12,7 @@ spec:
   project: default
   source:
     repoURL: https://gitlab.myweb.io/jerry/test-stg.git
-    path: rabbitmq-10.1.1
+    path: rabbitmq-10.1.8
     targetRevision: HEAD
     helm:
       valueFiles:
