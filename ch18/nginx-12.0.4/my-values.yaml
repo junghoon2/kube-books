@@ -746,7 +746,7 @@ healthIngress:
 metrics:
   ## @param metrics.enabled Start a Prometheus exporter sidecar container
   ##
-  enabled: false
+  enabled: true
   ## @param metrics.port NGINX Container Status Port scraped by Prometheus Exporter
   ## Defaults to specified http port
   port: ""
@@ -819,10 +819,10 @@ metrics:
   serviceMonitor:
     ## @param metrics.serviceMonitor.enabled Creates a Prometheus Operator ServiceMonitor (also requires `metrics.enabled` to be `true`)
     ##
-    enabled: false
+    enabled: true
     ## @param metrics.serviceMonitor.namespace Namespace in which Prometheus is running
     ##
-    namespace: ""
+    namespace: "monitoring"
     ## @param metrics.serviceMonitor.jobLabel The name of the label on the target service to use as the job name in prometheus.
     ##
     jobLabel: ""
