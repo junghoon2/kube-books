@@ -151,7 +151,7 @@ podPortName: grafana
 ##
 service:
   enabled: true
-  type: ClusterIP
+  type: LoadBalancer
   port: 80
   targetPort: 3000
     # targetPort: 4181 To be used with a proxy extraContainer
@@ -282,8 +282,8 @@ extraContainerVolumes: []
 ##
 persistence:
   type: pvc
-  enabled: false
-  # storageClassName: default
+  enabled: true
+  storageClassName: openebs-hostpath
   accessModes:
     - ReadWriteOnce
   size: 10Gi
