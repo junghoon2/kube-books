@@ -83,7 +83,7 @@ image:
   ## Defaults to 'Always' if image tag is 'latest', else set to 'IfNotPresent'
   ## ref: https://kubernetes.io/docs/user-guide/images/#pre-pulling-images
   ##
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
   ## Optionally specify an array of imagePullSecrets.
   ## Secrets must be manually created in the namespace.
   ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
@@ -253,6 +253,12 @@ master:
   resources:
     limits: {}
     requests: {}
+    limits:
+      cpu: 150m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
   ## Configure Pods Security Context
   ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
   ## @param master.podSecurityContext.enabled Enabled Redis&reg; master pods' Security Context
@@ -642,6 +648,12 @@ replica:
     requests: {}
     #   cpu: 250m
     #   memory: 256Mi
+    limits:
+      cpu: 150m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
   ## Configure Pods Security Context
   ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
   ## @param replica.podSecurityContext.enabled Enabled Redis&reg; replicas pods' Security Context
